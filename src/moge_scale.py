@@ -1,3 +1,9 @@
+"""MoGe 기반 metric depth/point 결과를 마스크 영역으로 제한하고 스케일을 추정.
+
+- 입력: 원본 이미지 + SAM2 마스크
+- 출력: 마스크 영역의 depth/points + bbox 기반 스케일 통계(JSON/NPZ)
+"""
+
 import argparse
 import json
 import os
@@ -10,6 +16,7 @@ import torch
 
 
 def resolve_moge_root(repo_root: Path) -> Path:
+    """MoGe 레포 위치를 환경변수/기본 후보에서 탐색."""
     env_root = os.environ.get("MOGE_ROOT")
     candidates = []
     if env_root:
@@ -23,6 +30,7 @@ def resolve_moge_root(repo_root: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
+    """CLI 인자 정의."""
     repo_root = Path(__file__).resolve().parents[1]
     default_output_dir = repo_root / "outputs" / "moge_scale"
 
@@ -50,12 +58,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_path(path: Path, base: Path) -> Path:
+    """상대 경로를 절대 경로로 변환."""
     if path.is_absolute():
         return path
     return (base / path).resolve()
 
 
 def load_mask(path: Path) -> np.ndarray:
+    """마스크 이미지를 로드하여 bool 배열로 반환."""
     mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if mask is None:
         raise FileNotFoundError(path)
@@ -65,6 +75,7 @@ def load_mask(path: Path) -> np.ndarray:
 
 
 def compute_scale(points: np.ndarray, method: str) -> dict:
+    """포인트 bbox 기반 스케일 통계를 계산."""
     mins = points.min(axis=0)
     maxs = points.max(axis=0)
     size = maxs - mins
@@ -95,6 +106,7 @@ def build_visualization(
     stats: dict,
     max_points: int,
 ):
+    """요약 시각화(이미지/마스크/깊이/포인트클라우드) 생성."""
     import matplotlib.pyplot as plt
 
     overlay = image_rgb.copy()
@@ -140,6 +152,7 @@ def build_visualization(
     ax_depth_masked.axis("off")
 
     if points_masked.size > 0:
+        # 포인트 수가 많을 경우 샘플링
         points_vis = points_masked
         if max_points > 0 and points_masked.shape[0] > max_points:
             rng = np.random.default_rng(0)
@@ -176,6 +189,7 @@ def build_visualization(
 
 
 def main() -> int:
+    """MoGe 추론 및 마스크 기반 스케일 계산 파이프라인."""
     args = parse_args()
     image_path = resolve_path(args.image, Path.cwd())
     mask_path = resolve_path(args.mask, Path.cwd())
@@ -183,6 +197,7 @@ def main() -> int:
 
     repo_root = Path(__file__).resolve().parents[1]
     moge_root = resolve_moge_root(repo_root)
+    # MoGe 패키지 import를 위해 경로 등록
     if str(moge_root) not in sys.path:
         sys.path.insert(0, str(moge_root))
     try:
@@ -228,12 +243,14 @@ def main() -> int:
 
     user_mask = load_mask(mask_path)
     if user_mask.shape != depth.shape:
+        # depth 해상도와 mask 해상도가 다르면 최근접 리사이즈
         user_mask = cv2.resize(
             user_mask.astype(np.uint8),
             (depth.shape[1], depth.shape[0]),
             interpolation=cv2.INTER_NEAREST,
         ).astype(bool)
 
+    # user_mask + MoGe valid 마스크 + finite 조건을 모두 만족하는 영역만 사용
     combined = user_mask & valid
     finite = np.isfinite(points).all(axis=2) & np.isfinite(depth)
     combined &= finite
@@ -245,6 +262,7 @@ def main() -> int:
     masked_points = points[combined]
     masked_depth = depth[combined]
 
+    # 통계값 수집
     stats = {
         "image": str(image_path),
         "mask": str(mask_path),
@@ -269,6 +287,7 @@ def main() -> int:
         json.dump(stats, f, indent=2)
 
     if not args.no_save_npz:
+        # 후속 단계(스케일 추정/시각화)를 위해 NPZ 저장
         npz_path = output_dir / f"{stem}.npz"
         np.savez_compressed(
             npz_path,
@@ -283,6 +302,7 @@ def main() -> int:
         print(f"Saved masked outputs: {npz_path}")
 
     if args.save_viz or args.show_viz:
+        # 옵션일 때만 matplotlib 시각화 생성
         import matplotlib.pyplot as plt
 
         fig = build_visualization(

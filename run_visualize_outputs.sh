@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 통합 시각화 UI 실행 스크립트
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${script_dir}"
 
+# 기본 conda env
 sam3d_env="sam3d-objects"
 output_root=""
 image_path=""
@@ -33,6 +36,7 @@ USAGE
 }
 
 resolve_path() {
+  # 상대 경로를 레포 루트 기준으로 변환
   local input="$1"
   if [[ "${input}" = /* ]]; then
     echo "${input}"
@@ -92,6 +96,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${output_root}" ]]; then
+  # 필수 인자 체크
   echo "--output-root is required"
   usage
   exit 1

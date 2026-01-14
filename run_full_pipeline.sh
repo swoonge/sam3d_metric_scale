@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 통합 파이프라인:
+# 1) SAM2 UI로 마스크 생성
+# 2) MoGe로 metric depth/포인트 추출
+# 3) SAM3D로 PLY 생성
+# 4) MoGe 포인트 기반으로 SAM3D 스케일 추정
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${script_dir}"
 
+# 기본 conda env 이름
 sam2_env="sam2"
 sam3d_env="sam3d-objects"
 moge_env="moge"
@@ -14,6 +21,7 @@ if [[ ! -f "${default_image}" && -f "${repo_root}/../sam2/notebooks/videos/bedro
 fi
 image_path="${default_image}"
 
+# 출력 베이스 디렉터리
 output_base="${repo_root}/outputs"
 
 default_sam3d_config="${repo_root}/sam-3d-objects/checkpoints/hf/pipeline.yaml"
@@ -22,12 +30,19 @@ if [[ ! -f "${default_sam3d_config}" && -f "${repo_root}/../sam-3d-objects/check
 fi
 sam3d_config="${default_sam3d_config}"
 
+# SAM3D 옵션
 sam3d_seed=42
 sam3d_compile=0
 
+# MoGe 옵션
 moge_model="Ruicheng/moge-2-vitl-normal"
 scale_method="bbox_diag"
 min_pixels=100
+
+scale_use_ransac=0
+scale_ransac_iters=200
+scale_ransac_sample=64
+scale_ransac_thresh=0.02
 
 process_all=1
 
@@ -48,11 +63,16 @@ Options:
   --moge-model NAME         HF model id or local path
   --scale-method NAME       bbox_diag | bbox_max (default: bbox_diag)
   --min-pixels INT          Minimum valid pixels for scale
+  --scale-use-ransac        Enable RANSAC for scale estimation
+  --scale-ransac-iters N    RANSAC iterations (default: 200)
+  --scale-ransac-sample N   RANSAC sample size (default: 64)
+  --scale-ransac-thresh F   RANSAC inlier distance threshold
   -h, --help                Show this help
 USAGE
 }
 
 resolve_path() {
+  # 상대 경로를 레포 루트 기준으로 해석
   local input="$1"
   if [[ "${input}" = /* ]]; then
     echo "${input}"
@@ -62,6 +82,7 @@ resolve_path() {
 }
 
 make_output_root() {
+  # 동일 이름 폴더가 있을 경우 _001, _002 형태로 새 디렉터리 생성
   local base_dir="$1"
   local stem="$2"
   local root="${base_dir}/${stem}"
@@ -123,6 +144,22 @@ while [[ $# -gt 0 ]]; do
       min_pixels="$2"
       shift 2
       ;;
+    --scale-use-ransac)
+      scale_use_ransac=1
+      shift
+      ;;
+    --scale-ransac-iters)
+      scale_ransac_iters="$2"
+      shift 2
+      ;;
+    --scale-ransac-sample)
+      scale_ransac_sample="$2"
+      shift 2
+      ;;
+    --scale-ransac-thresh)
+      scale_ransac_thresh="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -140,6 +177,7 @@ if ! command -v conda >/dev/null 2>&1; then
   exit 1
 fi
 
+# 최종 경로 정규화
 image_path="$(resolve_path "${image_path}")"
 output_base="$(resolve_path "${output_base}")"
 sam3d_config="$(resolve_path "${sam3d_config}")"
@@ -150,16 +188,19 @@ output_root="$(make_output_root "${output_base}" "${image_stem}")"
 mask_dir="${output_root}/sam2_masks"
 sam3d_out_dir="${output_root}/sam3d"
 moge_out_dir="${output_root}/moge_scale"
+scale_out_dir="${output_root}/sam3d_scale"
 
 mkdir -p "${output_root}"
 echo "Output root: ${output_root}"
+# 원본 이미지는 결과 루트에 복사(재현성/추적 목적)
 cp -n "${image_path}" "${output_root}/" 2>/dev/null || true
 
+# 1) SAM2 UI 실행(마스크 생성)
 conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
   --image "${image_path}" \
   --output-dir "${mask_dir}"
 
-mkdir -p "${sam3d_out_dir}" "${moge_out_dir}"
+mkdir -p "${sam3d_out_dir}" "${moge_out_dir}" "${scale_out_dir}"
 
 if [[ ${process_all} -eq 1 ]]; then
   mapfile -t masks < <(ls -1 "${mask_dir}/${image_stem}"_*.png 2>/dev/null || true)
@@ -178,8 +219,13 @@ fi
 
 for mask_path in "${masks[@]}"; do
   mask_name="$(basename "${mask_path}")"
-  output_path="${sam3d_out_dir}/${mask_name%.png}.ply"
+  mask_stem="${mask_name%.png}"
+  output_path="${sam3d_out_dir}/${mask_stem}.ply"
+  moge_npz="${moge_out_dir}/${image_stem}_${mask_stem}.npz"
+  scale_txt="${scale_out_dir}/${mask_stem}_scale.txt"
+  scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
 
+  # 2) MoGe 실행(마스크 영역 metric depth/points)
   conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
     --image "${image_path}" \
     --mask "${mask_path}" \
@@ -188,6 +234,7 @@ for mask_path in "${masks[@]}"; do
     --scale-method "${scale_method}" \
     --min-pixels "${min_pixels}"
 
+  # 3) SAM3D 실행(PLY 생성)
   compile_flag=""
   if [[ ${sam3d_compile} -eq 1 ]]; then
     compile_flag="--compile"
@@ -200,5 +247,16 @@ for mask_path in "${masks[@]}"; do
     --output "${output_path}" \
     --seed "${sam3d_seed}" \
     ${compile_flag}
+
+  # 4) 스케일 추정(Umeyama ICP)
+  conda run -n "${sam3d_env}" python "${repo_root}/src/sam3d_scale.py" \
+    --sam3d-ply "${output_path}" \
+    --moge-npz "${moge_npz}" \
+    --output-scale "${scale_txt}" \
+    --output-scaled-ply "${scaled_ply}" \
+    $( [[ ${scale_use_ransac} -eq 1 ]] && echo "--use-ransac" ) \
+    --ransac-iters "${scale_ransac_iters}" \
+    --ransac-sample "${scale_ransac_sample}" \
+    --ransac-inlier-thresh "${scale_ransac_thresh}"
 
 done

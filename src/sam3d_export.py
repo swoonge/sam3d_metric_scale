@@ -1,3 +1,10 @@
+"""SAM3D inference 실행 및 PLY 저장/시각화를 담당하는 유틸리티.
+
+- 입력: 원본 이미지 + SAM2 마스크
+- 출력: SAM3D 결과 PLY
+- 옵션: 생성된 PLY를 다양한 백엔드로 시각화
+"""
+
 import argparse
 import os
 import sys
@@ -7,6 +14,7 @@ import numpy as np
 
 
 def resolve_sam3d_root(repo_root: Path) -> Path:
+    """SAM3D Objects 레포 경로를 환경변수/기본 후보에서 탐색."""
     env_root = os.environ.get("SAM3D_ROOT")
     candidates = []
     if env_root:
@@ -20,6 +28,7 @@ def resolve_sam3d_root(repo_root: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
+    """CLI 인자 정의."""
     repo_root = Path(__file__).resolve().parents[1]
     sam3d_root = resolve_sam3d_root(repo_root)
     default_config = sam3d_root / "checkpoints" / "hf" / "pipeline.yaml"
@@ -45,12 +54,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_path(path: Path, base: Path) -> Path:
+    """상대 경로를 실행 디렉터리 기준 절대 경로로 변환."""
     if path.is_absolute():
         return path
     return (base / path).resolve()
 
 
 def sample_points(points: np.ndarray, colors: np.ndarray | None, max_points: int):
+    """시각화 부담을 줄이기 위해 포인트 수를 제한."""
     if max_points <= 0 or points.shape[0] <= max_points:
         return points, colors
     rng = np.random.default_rng(0)
@@ -60,6 +71,7 @@ def sample_points(points: np.ndarray, colors: np.ndarray | None, max_points: int
 
 
 def load_ply_points(path: Path):
+    """PLY 파일에서 포인트/색상을 로드."""
     try:
         from plyfile import PlyData
     except ImportError as exc:
@@ -77,6 +89,7 @@ def load_ply_points(path: Path):
 
     colors = None
     if all(name in names for name in ("red", "green", "blue")):
+        # 일반 RGB 컬러
         colors = np.stack(
             (vertex["red"], vertex["green"], vertex["blue"]),
             axis=1,
@@ -84,6 +97,7 @@ def load_ply_points(path: Path):
         if colors.max() > 1.0:
             colors = colors / 255.0
     elif all(name in names for name in ("f_dc_0", "f_dc_1", "f_dc_2")):
+        # Gaussian Splatting 계열의 색상 채널
         colors = np.stack(
             (vertex["f_dc_0"], vertex["f_dc_1"], vertex["f_dc_2"]),
             axis=1,
@@ -94,6 +108,7 @@ def load_ply_points(path: Path):
 
 
 def visualize_with_open3d(points: np.ndarray, colors: np.ndarray | None) -> bool:
+    """Open3D로 로컬 뷰어를 띄운다."""
     try:
         import open3d as o3d
     except ImportError:
@@ -108,6 +123,7 @@ def visualize_with_open3d(points: np.ndarray, colors: np.ndarray | None) -> bool
 
 
 def visualize_with_trimesh(points: np.ndarray, colors: np.ndarray | None) -> bool:
+    """trimesh 뷰어로 포인트클라우드 시각화."""
     try:
         import trimesh
     except ImportError:
@@ -125,6 +141,7 @@ def visualize_with_trimesh(points: np.ndarray, colors: np.ndarray | None) -> boo
 
 
 def visualize_with_matplotlib(points: np.ndarray, colors: np.ndarray | None) -> bool:
+    """matplotlib 3D 산점도로 간단 시각화."""
     try:
         import matplotlib.pyplot as plt
     except ImportError:
@@ -160,6 +177,7 @@ def visualize_with_matplotlib(points: np.ndarray, colors: np.ndarray | None) -> 
 
 
 def visualize_with_gradio(ply_path: Path) -> bool:
+    """gradio Model3D로 PLY를 웹 UI에서 확인."""
     try:
         import gradio as gr
     except ImportError:
@@ -173,6 +191,7 @@ def visualize_with_gradio(ply_path: Path) -> bool:
 
 
 def visualize_ply(path: Path, method: str, max_points: int) -> bool:
+    """지정된 백엔드로 PLY 시각화. auto는 순차 시도."""
     if method == "auto":
         for candidate in ("gradio", "open3d", "trimesh", "matplotlib"):
             if visualize_ply(path, candidate, max_points):
@@ -205,11 +224,13 @@ def visualize_ply(path: Path, method: str, max_points: int) -> bool:
 
 
 def main() -> int:
+    """main 진입점."""
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[1]
     sam3d_root = resolve_sam3d_root(repo_root)
 
     if args.ply is not None:
+        # PLY만 전달된 경우 시각화 전용 모드로 동작
         ply_path = resolve_path(args.ply, Path.cwd())
         if not ply_path.exists():
             print(f"Missing ply: {ply_path}")
@@ -248,6 +269,7 @@ def main() -> int:
     if args.output is not None:
         output_path = resolve_path(args.output, Path.cwd())
     else:
+        # 출력 경로 미지정 시 기본 출력 디렉터리 사용
         output_dir = resolve_path(args.output_dir, Path.cwd())
         output_dir.mkdir(parents=True, exist_ok=True)
         output_name = f"{image_path.stem}_{mask_path.stem}.ply"
@@ -255,6 +277,7 @@ def main() -> int:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # sam-3d-objects 패키지를 import 가능하도록 경로 등록
     if str(sam3d_root) not in sys.path:
         sys.path.insert(0, str(sam3d_root))
     os.chdir(sam3d_root)
@@ -265,15 +288,18 @@ def main() -> int:
     image = load_image(str(image_path))
     mask = load_mask(str(mask_path))
 
+    # SAM3D 추론 실행
     output = inference(image, mask, seed=args.seed)
     if "gs" not in output:
         print("SAM3D output missing 'gs' key")
         return 1
 
+    # Gaussian Splat 결과를 PLY로 저장
     output["gs"].save_ply(str(output_path))
     print(f"SAM3D saved: {output_path}")
 
     if args.show_viz:
+        # 필요할 때만 PLY 시각화 수행
         ok = visualize_ply(output_path, args.viz_method, args.viz_max_points)
         if not ok:
             print(

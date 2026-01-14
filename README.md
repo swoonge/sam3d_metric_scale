@@ -12,6 +12,7 @@
   - `image_point.py`: SAM2 포인트 기반 마스크 UI
   - `moge_scale.py`: 마스크 영역 MoGe depth + 스케일 추정
   - `sam3d_export.py`: 이미지+마스크 → SAM3D 결과(.ply)
+  - `sam3d_scale.py`: MoGe 포인트클라우드 기반 SAM3D 스케일 추정
   - `visualize_outputs.py`: 결과 폴더 기반 통합 시각화
 - `run_full_pipeline.sh`: SAM2 → MoGe → SAM3D 통합 파이프라인
 - `run_visualize_outputs.sh`: 결과 시각화 실행 스크립트
@@ -24,6 +25,7 @@
   - `sam2_masks/`: SAM2 마스크
   - `moge_scale/`: MoGe 스케일 결과(JSON/NPZ)
   - `sam3d/`: SAM3D 결과(Ply)
+  - `sam3d_scale/`: 스케일 값(txt) + 스케일 적용 PLY
 - 동일 이름 폴더가 있으면 `_001`, `_002`처럼 번호가 붙습니다.
 - 원본 이미지는 출력 루트에 복사됩니다.
 
@@ -86,7 +88,22 @@ conda run -n moge python -m pip install -e ./MoGe
 ./run_full_pipeline.sh \
   --image datas/coffee_maker_sample.jpg
 ```
-UI에서 마스크 저장 후 `q`로 종료하면 MoGe → SAM3D 순서로 실행됩니다.
+UI에서 마스크 저장 후 `q`로 종료하면 MoGe → SAM3D → 스케일 추정 순서로 실행됩니다.
+RANSAC 스케일 추정 사용:
+```bash
+./run_full_pipeline.sh \
+  --image datas/coffee_maker_sample.jpg \
+  --scale-use-ransac \
+  --scale-ransac-iters 300 \
+  --scale-ransac-sample 64 \
+  --scale-ransac-thresh 0.02
+```
+
+## 스케일 추정 방식
+- 기본: Kabsch-Umeyama 기반 ICP(최근접 매칭)으로 scale 계수를 추정합니다.
+- 옵션: `--use-ransac`으로 Umeyama + RANSAC 기반 강인 추정 사용 가능(기본 비활성).
+- 산출물: `*_scale.txt`에 스케일 값만 저장합니다.
+- 경계/아웃라이어 처리: 이미지 경계 제외 + MAD 기반 깊이/반경 아웃라이어 제거(기본 활성).
 
 ### 2) 결과 시각화
 ```bash
@@ -106,6 +123,11 @@ conda run -n sam3d-objects python src/sam3d_export.py \
 conda run -n moge python src/moge_scale.py \
   --image /path/to/image.jpg \
   --mask /path/to/mask.png
+```
+```bash
+conda run -n sam3d-objects python src/sam3d_scale.py \
+  --sam3d-ply /path/to/sam3d.ply \
+  --moge-npz /path/to/moge_output.npz
 ```
 
 ## 환경 변수

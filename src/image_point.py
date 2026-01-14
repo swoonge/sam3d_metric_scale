@@ -1,3 +1,13 @@
+"""SAM2 포인트 기반 마스크 UI.
+
+- 좌클릭: positive 포인트 추가
+- 우클릭: negative 포인트 추가
+- s: 마스크 저장
+- r: 초기화
+- z: 마지막 포인트 undo
+- q: 종료
+"""
+
 import argparse
 import os
 import sys
@@ -11,6 +21,7 @@ import torch
 
 
 def resolve_sam2_root(repo_root: Path) -> Path:
+    """SAM2 레포 위치를 환경변수/기본 후보에서 탐색."""
     env_root = os.environ.get("SAM2_ROOT")
     candidates = []
     if env_root:
@@ -24,6 +35,7 @@ def resolve_sam2_root(repo_root: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
+    """CLI 인자 정의."""
     repo_root = Path(__file__).resolve().parents[1]
     sam2_root = resolve_sam2_root(repo_root)
     default_checkpoint = sam2_root / "checkpoints" / "sam2.1_hiera_large.pt"
@@ -48,6 +60,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def autocast_context(device: str):
+    """CUDA일 때만 bfloat16 autocast를 활성화."""
     if device == "cuda":
         return torch.autocast("cuda", dtype=torch.bfloat16)
     return nullcontext()
@@ -63,8 +76,10 @@ def build_help_panel(
     text_color=(20, 20, 20),
     border_color=(200, 200, 200),
 ):
+    """오른쪽 안내 패널 이미지를 생성."""
     font = cv2.FONT_HERSHEY_SIMPLEX
     if not lines:
+        # 안내 문구가 비어 있을 때 최소 패널 크기 보장
         panel = np.full((60, 200, 3), bg_color, dtype=np.uint8)
         cv2.rectangle(panel, (0, 0), (199, 59), border_color, 1)
         return panel
@@ -107,6 +122,7 @@ def build_help_panel(
 def stack_with_panel_right(
     image: np.ndarray, panel: np.ndarray, bg_color=(245, 245, 245)
 ) -> np.ndarray:
+    """이미지 오른쪽에 패널을 합성하여 하나의 캔버스를 만든다."""
     img_h, img_w = image.shape[:2]
     panel_h, panel_w = panel.shape[:2]
     height = max(img_h, panel_h)
@@ -117,6 +133,7 @@ def stack_with_panel_right(
 
 
 def main() -> None:
+    """SAM2 UI 실행 및 마스크 저장 루프."""
     args = parse_args()
     if args.device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -160,12 +177,14 @@ def main() -> None:
     if not image_path.exists():
         raise FileNotFoundError(f"Missing image: {image_path}")
 
+    # sam2 패키지를 import 가능하도록 경로 등록
     if str(sam2_root) not in sys.path:
         sys.path.insert(0, str(sam2_root))
     os.chdir(sam2_root)
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
+    # 모델 로드 및 predictor 생성
     model = build_sam2(model_cfg, str(checkpoint_path), device=device)
     predictor = SAM2ImagePredictor(model)
 
@@ -177,6 +196,7 @@ def main() -> None:
     with torch.inference_mode(), autocast_context(device):
         predictor.set_image(img_rgb)
 
+    # 상태값 초기화
     points = []  # list of (x,y)
     labels = []  # 1=pos, 0=neg
     last_mask = None
@@ -185,6 +205,7 @@ def main() -> None:
     status_time = 0.0
 
     def run_predict():
+        """현재 포인트를 기반으로 마스크를 재계산."""
         nonlocal last_mask, last_score
         if len(points) == 0:
             last_mask = None
@@ -201,19 +222,23 @@ def main() -> None:
                 multimask_output=True,
             )
 
+        # 가장 높은 score 마스크 선택
         best = int(np.argmax(scores))
         last_mask = (masks[best] > 0).astype(np.uint8) * 255
         last_score = float(scores[best])
 
     def draw_ui():
+        """이미지 + 마스크 오버레이 + 포인트 + 패널을 합성."""
         vis = img_bgr.copy()
 
         if last_mask is not None:
+            # 마스크를 초록색으로 반투명 오버레이
             green = np.zeros_like(vis)
             green[:, :, 1] = 255
             alpha = (last_mask > 0).astype(np.float32) * 0.35
             vis = (vis * (1 - alpha[..., None]) + green * alpha[..., None]).astype(np.uint8)
 
+        # 포인트 표시 (positive=녹색, negative=빨간색)
         for (x, y), lab in zip(points, labels):
             color = (0, 255, 0) if lab == 1 else (0, 0, 255)
             cv2.circle(vis, (int(x), int(y)), 5, color, -1)
@@ -222,6 +247,7 @@ def main() -> None:
         return stack_with_panel_right(vis, panel)
 
     def draw_help_panel():
+        """오른쪽 안내 패널 텍스트 구성."""
         score_val = "-" if last_score is None else f"{last_score:.4f}"
         status_line = f"score: {score_val}  points: {len(points)}"
         lines = []
@@ -237,6 +263,7 @@ def main() -> None:
         return build_help_panel(lines)
 
     def on_mouse(event, x, y, flags, param):
+        """마우스 클릭으로 포인트 추가."""
         if event == cv2.EVENT_LBUTTONDOWN:
             if flags & cv2.EVENT_FLAG_SHIFTKEY:
                 points.append((x, y))
@@ -246,28 +273,34 @@ def main() -> None:
                 labels.append(1)
             run_predict()
 
+    # 창 생성 및 마우스 콜백 등록
     cv2.namedWindow("sam2_point_ui", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("sam2_point_ui", args.window_width, args.window_height)
     cv2.setMouseCallback("sam2_point_ui", on_mouse)
 
+    # 초기 예측(포인트 없으면 no-op)
     run_predict()
 
     save_index = 0
     while True:
+        # 키 입력 처리 루프
         cv2.imshow("sam2_point_ui", draw_ui())
         k = cv2.waitKey(10) & 0xFF
 
         if k == ord("z"):
+            # 마지막 포인트 제거
             if points:
                 points.pop()
                 labels.pop()
                 run_predict()
         elif k == ord("r"):
+            # 상태 초기화
             points.clear()
             labels.clear()
             last_mask = None
             last_score = None
         elif k == ord("s"):
+            # 마스크 저장
             if last_mask is None:
                 status_msg = "no mask to save"
                 status_time = time.time()
@@ -279,6 +312,7 @@ def main() -> None:
                 status_time = time.time()
                 save_index += 1
         elif k == ord("q") or k == 27:
+            # 종료
             break
 
     cv2.destroyAllWindows()
