@@ -7,11 +7,11 @@ SAM3D + MoGe2 스케일 보정 연구를 위한 로컬 작업 공간입니다.
 - 실험용 스크립트와 실행 로그를 이 레포에서 관리.
 
 ## 구성
-- `image_point.py`: SAM2 포인트 기반 마스크 UI
-- `sam3d_export.py`: 이미지+마스크 → SAM3D 결과(.ply)
-- `moge_scale.py`: 마스크 영역의 MoGe depth + 스케일 추정
+- `src/image_point.py`: SAM2 포인트 기반 마스크 UI
+- `src/sam3d_export.py`: 이미지+마스크 → SAM3D 결과(.ply)
+- `src/moge_scale.py`: 마스크 영역의 MoGe depth + 스케일 추정
 - `run_full_pipeline.sh`: SAM2 UI → MoGe → SAM3D 통합 파이프라인
-- `visualize_outputs.py`: 결과 폴더 기반 통합 시각화
+- `src/visualize_outputs.py`: 결과 폴더 기반 통합 시각화
 - `run_visualize_outputs.sh`: 시각화 실행용 셸
 - `datas/`: 샘플 이미지
 - `outputs/`: 결과 저장(자동 생성, gitignored)
@@ -24,10 +24,15 @@ SAM3D + MoGe2 스케일 보정 연구를 위한 로컬 작업 공간입니다.
 - 동일 이름 폴더가 있으면 `_001`, `_002`처럼 번호가 붙습니다.
 - 원본 이미지는 출력 루트에 복사됩니다.
 
+## 외부 레포(gitignored)
+- `sam2/`
+- `sam-3d-objects/`
+- `MoGe/`
+
 ## 사전 준비
 - Conda env: `sam2`, `sam3d-objects`, `moge`
 - 외부 레포 위치:
-  - `sam2/`, `sam-3d-objects/`를 이 레포 루트 또는 상위 경로에 두면 기본 경로로 동작합니다.
+  - `sam2/`, `sam-3d-objects/`, `MoGe/`를 이 레포 루트 또는 상위 경로에 두면 기본 경로로 동작합니다.
   - 다른 위치라면 `--image`, `--sam3d-config`로 직접 지정하세요.
 - 환경 변수(선택): `SAM2_ROOT`, `SAM3D_ROOT`를 지정하면 개별 실행 시 우선 사용합니다.
 - SAM3D 사용은 HF 승인 필요.
@@ -78,14 +83,14 @@ SAM3D + MoGe2 스케일 보정 연구를 위한 로컬 작업 공간입니다.
 
 ### SAM3D export
 ```bash
-conda run -n sam3d-objects python sam3d_export.py \
+conda run -n sam3d-objects python src/sam3d_export.py \
   --image /path/to/image.jpg \
   --mask /path/to/mask.png
 ```
 
 ### MoGe scale
 ```bash
-conda run -n moge python moge_scale.py \
+conda run -n moge python src/moge_scale.py \
   --image /path/to/image.jpg \
   --mask /path/to/mask.png
 ```

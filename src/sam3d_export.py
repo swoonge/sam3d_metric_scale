@@ -20,7 +20,7 @@ def resolve_sam3d_root(repo_root: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    repo_root = Path(__file__).resolve().parent
+    repo_root = Path(__file__).resolve().parents[1]
     sam3d_root = resolve_sam3d_root(repo_root)
     default_config = sam3d_root / "checkpoints" / "hf" / "pipeline.yaml"
     default_output_dir = repo_root / "outputs" / "sam3d"
@@ -206,7 +206,7 @@ def visualize_ply(path: Path, method: str, max_points: int) -> bool:
 
 def main() -> int:
     args = parse_args()
-    repo_root = Path(__file__).resolve().parent
+    repo_root = Path(__file__).resolve().parents[1]
     sam3d_root = resolve_sam3d_root(repo_root)
 
     if args.ply is not None:

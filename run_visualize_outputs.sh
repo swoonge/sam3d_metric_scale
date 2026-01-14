@@ -134,4 +134,4 @@ if [[ -n "${moge_axis_steps}" ]]; then
   args+=(--moge-axis-steps "${moge_axis_steps}")
 fi
 
-conda run -n "${sam3d_env}" python "${repo_root}/visualize_outputs.py" "${args[@]}"
+conda run -n "${sam3d_env}" python "${repo_root}/src/visualize_outputs.py" "${args[@]}"

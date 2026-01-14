@@ -23,7 +23,7 @@ def resolve_sam2_root(repo_root: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    repo_root = Path(__file__).resolve().parent
+    repo_root = Path(__file__).resolve().parents[1]
     sam2_root = resolve_sam2_root(repo_root)
     default_checkpoint = sam2_root / "checkpoints" / "sam2.1_hiera_large.pt"
     default_model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
@@ -122,7 +122,7 @@ def main() -> None:
     else:
         device = args.device
 
-    repo_root = Path(__file__).resolve().parent
+    repo_root = Path(__file__).resolve().parents[1]
     sam2_root = resolve_sam2_root(repo_root)
     sam2_pkg_root = sam2_root / "sam2"
 

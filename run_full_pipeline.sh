@@ -155,7 +155,7 @@ mkdir -p "${output_root}"
 echo "Output root: ${output_root}"
 cp -n "${image_path}" "${output_root}/" 2>/dev/null || true
 
-conda run -n "${sam2_env}" python "${repo_root}/image_point.py" \
+conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
   --image "${image_path}" \
   --output-dir "${mask_dir}"
 
@@ -180,7 +180,7 @@ for mask_path in "${masks[@]}"; do
   mask_name="$(basename "${mask_path}")"
   output_path="${sam3d_out_dir}/${mask_name%.png}.ply"
 
-  conda run -n "${moge_env}" python "${repo_root}/moge_scale.py" \
+  conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
     --image "${image_path}" \
     --mask "${mask_path}" \
     --model "${moge_model}" \
@@ -193,7 +193,7 @@ for mask_path in "${masks[@]}"; do
     compile_flag="--compile"
   fi
 
-  conda run -n "${sam3d_env}" python "${repo_root}/sam3d_export.py" \
+  conda run -n "${sam3d_env}" python "${repo_root}/src/sam3d_export.py" \
     --image "${image_path}" \
     --mask "${mask_path}" \
     --sam3d-config "${sam3d_config}" \
