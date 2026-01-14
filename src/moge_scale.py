@@ -1,11 +1,25 @@
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
-from moge.model.v2 import MoGeModel
+
+
+def resolve_moge_root(repo_root: Path) -> Path:
+    env_root = os.environ.get("MOGE_ROOT")
+    candidates = []
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.append(repo_root / "MoGe")
+    candidates.append(repo_root.parent / "MoGe")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else repo_root / "MoGe"
 
 
 def parse_args() -> argparse.Namespace:
@@ -166,6 +180,19 @@ def main() -> int:
     image_path = resolve_path(args.image, Path.cwd())
     mask_path = resolve_path(args.mask, Path.cwd())
     output_dir = resolve_path(args.output_dir, Path.cwd())
+
+    repo_root = Path(__file__).resolve().parents[1]
+    moge_root = resolve_moge_root(repo_root)
+    if str(moge_root) not in sys.path:
+        sys.path.insert(0, str(moge_root))
+    try:
+        from moge.model.v2 import MoGeModel
+    except ModuleNotFoundError as exc:
+        print(
+            "MoGe module not found. Install it with `pip install -e ./MoGe` "
+            "or set MOGE_ROOT to the MoGe repository path."
+        )
+        raise exc
 
     if not image_path.exists():
         print(f"Missing image: {image_path}")

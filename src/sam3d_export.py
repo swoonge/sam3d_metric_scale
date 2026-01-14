@@ -255,6 +255,8 @@ def main() -> int:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if str(sam3d_root) not in sys.path:
+        sys.path.insert(0, str(sam3d_root))
     os.chdir(sam3d_root)
     sys.path.append(str(sam3d_root / "notebook"))
     from inference import Inference, load_image, load_mask

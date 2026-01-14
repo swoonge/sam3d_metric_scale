@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -159,6 +160,8 @@ def main() -> None:
     if not image_path.exists():
         raise FileNotFoundError(f"Missing image: {image_path}")
 
+    if str(sam2_root) not in sys.path:
+        sys.path.insert(0, str(sam2_root))
     os.chdir(sam2_root)
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
