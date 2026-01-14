@@ -1,0 +1,29 @@
+# Outputs
+outputs/
+
+# Tokens / secrets
+hugging_face_token.txt
+*.env
+*.token
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Virtual envs
+.venv/
+.conda/
+
+# External repos (recommended as local deps only)
+sam2/
+sam-3d-objects/
+MoGe/
+
+# OS files
+.DS_Store
+Thumbs.db
