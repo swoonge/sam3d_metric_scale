@@ -16,6 +16,10 @@ no_browser=0
 moge_max_points=""
 moge_axis_fraction=""
 moge_axis_steps=""
+moge_border_margin=""
+moge_depth_mad=""
+moge_radius_mad=""
+moge_min_points=""
 
 usage() {
   cat <<USAGE
@@ -31,6 +35,10 @@ Options:
   --moge-max-points N  Max points for MoGe point cloud
   --moge-axis-fraction F Axis length as fraction of bbox max dim
   --moge-axis-steps N  Points per axis for MoGe axes
+  --moge-border-margin N Border margin for MoGe filtering
+  --moge-depth-mad F   Depth MAD threshold for MoGe filtering
+  --moge-radius-mad F  Radius MAD threshold for MoGe filtering
+  --moge-min-points N  Min points after filtering
   -h, --help           Show this help
 USAGE
 }
@@ -81,6 +89,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --moge-axis-steps)
       moge_axis_steps="$2"
+      shift 2
+      ;;
+    --moge-border-margin)
+      moge_border_margin="$2"
+      shift 2
+      ;;
+    --moge-depth-mad)
+      moge_depth_mad="$2"
+      shift 2
+      ;;
+    --moge-radius-mad)
+      moge_radius_mad="$2"
+      shift 2
+      ;;
+    --moge-min-points)
+      moge_min_points="$2"
       shift 2
       ;;
     -h|--help)
@@ -137,6 +161,22 @@ fi
 
 if [[ -n "${moge_axis_steps}" ]]; then
   args+=(--moge-axis-steps "${moge_axis_steps}")
+fi
+
+if [[ -n "${moge_border_margin}" ]]; then
+  args+=(--moge-border-margin "${moge_border_margin}")
+fi
+
+if [[ -n "${moge_depth_mad}" ]]; then
+  args+=(--moge-depth-mad "${moge_depth_mad}")
+fi
+
+if [[ -n "${moge_radius_mad}" ]]; then
+  args+=(--moge-radius-mad "${moge_radius_mad}")
+fi
+
+if [[ -n "${moge_min_points}" ]]; then
+  args+=(--moge-min-points "${moge_min_points}")
 fi
 
 conda run -n "${sam3d_env}" python "${repo_root}/src/visualize_outputs.py" "${args[@]}"
