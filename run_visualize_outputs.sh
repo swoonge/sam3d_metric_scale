@@ -1,3 +1,4 @@
+# ./sam3d_metric_scale/run_visualize_outputs.sh   --output-root /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/outputs/coffee_maker_sample
 #!/usr/bin/env bash
 set -euo pipefail
 

@@ -2,6 +2,7 @@
 
 - 입력: 원본 이미지 + SAM2 마스크
 - 출력: 마스크 영역의 depth/points + bbox 기반 스케일 통계(JSON/NPZ)
+- 경계/MAD 기반 전처리를 적용해 포인트를 저장
 """
 
 import argparse
@@ -47,8 +48,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=default_output_dir)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--no-save-npz", action="store_true")
+    parser.add_argument("--no-save-ply", action="store_true")
     parser.add_argument("--scale-method", choices=["bbox_diag", "bbox_max"], default="bbox_diag")
     parser.add_argument("--min-pixels", type=int, default=100)
+    parser.add_argument(
+        "--border-margin",
+        type=int,
+        default=5,
+        help="경계에서 제외할 픽셀 두께(0이면 비활성).",
+    )
+    parser.add_argument(
+        "--depth-mad",
+        type=float,
+        default=3.5,
+        help="깊이(z) MAD 아웃라이어 제거 임계값(<=0 비활성).",
+    )
+    parser.add_argument(
+        "--radius-mad",
+        type=float,
+        default=3.5,
+        help="중심 거리 MAD 아웃라이어 제거 임계값(<=0 비활성).",
+    )
+    parser.add_argument(
+        "--min-points",
+        type=int,
+        default=500,
+        help="필터 후 최소 포인트 수(미만이면 필터를 무시).",
+    )
     parser.add_argument("--save-viz", action="store_true")
     parser.add_argument("--show-viz", action="store_true")
     parser.add_argument("--viz-path", type=Path, default=None)
@@ -94,6 +120,74 @@ def compute_scale(points: np.ndarray, method: str) -> dict:
         "scale_method": method,
         "scale_value": value,
     }
+
+
+def mad_keep_mask(values: np.ndarray, thresh: float) -> np.ndarray:
+    """MAD 기반 keep mask 생성."""
+    if thresh <= 0:
+        return np.ones(values.shape[0], dtype=bool)
+    median = np.median(values)
+    mad = np.median(np.abs(values - median))
+    if mad < 1e-8:
+        return np.ones(values.shape[0], dtype=bool)
+    z_score = 0.6745 * (values - median) / mad
+    return np.abs(z_score) <= thresh
+
+
+def build_filter_keep_mask(
+    points: np.ndarray,
+    ys: np.ndarray,
+    xs: np.ndarray,
+    shape: tuple[int, int],
+    border_margin: int,
+    depth_mad: float,
+    radius_mad: float,
+) -> np.ndarray:
+    """경계 제거 + MAD 기반 아웃라이어 제거 keep mask 생성."""
+    keep = np.ones(points.shape[0], dtype=bool)
+    if border_margin > 0 and ys.shape[0] == points.shape[0]:
+        height, width = shape
+        keep &= (
+            (ys >= border_margin)
+            & (ys < height - border_margin)
+            & (xs >= border_margin)
+            & (xs < width - border_margin)
+        )
+
+    filtered = points[keep]
+    if filtered.size == 0:
+        return np.zeros(points.shape[0], dtype=bool)
+
+    if depth_mad > 0 or radius_mad > 0:
+        sub_keep = np.ones(filtered.shape[0], dtype=bool)
+        if depth_mad > 0:
+            sub_keep &= mad_keep_mask(filtered[:, 2], depth_mad)
+        if radius_mad > 0:
+            center = np.median(filtered, axis=0)
+            radius = np.linalg.norm(filtered - center, axis=1)
+            sub_keep &= mad_keep_mask(radius, radius_mad)
+        indices = np.where(keep)[0]
+        keep_final = np.zeros(points.shape[0], dtype=bool)
+        keep_final[indices[sub_keep]] = True
+        return keep_final
+
+    return keep
+
+
+def save_points_ply(points: np.ndarray, path: Path) -> None:
+    """(N, 3) 포인트를 ASCII PLY로 저장."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    points = points.astype(np.float32)
+    with path.open("w", encoding="utf-8") as f:
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {points.shape[0]}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("end_header\n")
+        if points.shape[0] > 0:
+            np.savetxt(f, points, fmt="%.6f %.6f %.6f")
 
 
 def build_visualization(
@@ -259,21 +353,52 @@ def main() -> int:
         print(f"Not enough valid pixels: {combined.sum()}")
         return 1
 
+    ys, xs = np.where(combined)
     masked_points = points[combined]
     masked_depth = depth[combined]
+
+    keep = build_filter_keep_mask(
+        masked_points,
+        ys,
+        xs,
+        combined.shape,
+        args.border_margin,
+        args.depth_mad,
+        args.radius_mad,
+    )
+    filter_applied = int(keep.sum()) >= args.min_points
+    if not filter_applied:
+        keep = np.ones(masked_points.shape[0], dtype=bool)
+
+    filtered_points = masked_points[keep]
+    filtered_depth = masked_depth[keep]
+    filtered_valid = combined.copy()
+    if keep.shape[0] == ys.shape[0]:
+        filtered_valid[ys[~keep], xs[~keep]] = False
+    if filtered_points.size == 0:
+        filtered_points = masked_points
+        filtered_depth = masked_depth
+        filtered_valid = combined
+        filter_applied = False
 
     # 통계값 수집
     stats = {
         "image": str(image_path),
         "mask": str(mask_path),
         "model": args.model,
-        "points_count": int(masked_points.shape[0]),
-        "depth_mean": float(masked_depth.mean()),
-        "depth_median": float(np.median(masked_depth)),
-        "depth_min": float(masked_depth.min()),
-        "depth_max": float(masked_depth.max()),
+        "points_count_raw": int(masked_points.shape[0]),
+        "points_count": int(filtered_points.shape[0]),
+        "filter_applied": bool(filter_applied),
+        "filter_border_margin": int(args.border_margin),
+        "filter_depth_mad": float(args.depth_mad),
+        "filter_radius_mad": float(args.radius_mad),
+        "filter_min_points": int(args.min_points),
+        "depth_mean": float(filtered_depth.mean()),
+        "depth_median": float(np.median(filtered_depth)),
+        "depth_min": float(filtered_depth.min()),
+        "depth_max": float(filtered_depth.max()),
     }
-    stats.update(compute_scale(masked_points, args.scale_method))
+    stats.update(compute_scale(filtered_points, args.scale_method))
 
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{image_path.stem}_{mask_path.stem}"
@@ -292,14 +417,24 @@ def main() -> int:
         np.savez_compressed(
             npz_path,
             mask=user_mask.astype(np.uint8),
-            valid_mask=combined.astype(np.uint8),
-            points_masked=masked_points.astype(np.float32),
-            depth_masked=masked_depth.astype(np.float32),
+            valid_mask=filtered_valid.astype(np.uint8),
+            points_masked=filtered_points.astype(np.float32),
+            depth_masked=filtered_depth.astype(np.float32),
         )
+    else:
+        npz_path = None
+
+    ply_path = None
+    if not args.no_save_ply:
+        # 외부 툴에서 바로 확인할 수 있도록 PLY도 저장
+        ply_path = output_dir / f"{stem}.ply"
+        save_points_ply(filtered_points, ply_path)
 
     print(f"Saved scale stats: {json_path}")
     if not args.no_save_npz:
         print(f"Saved masked outputs: {npz_path}")
+    if ply_path is not None:
+        print(f"Saved MoGe point cloud: {ply_path}")
 
     if args.save_viz or args.show_viz:
         # 옵션일 때만 matplotlib 시각화 생성
@@ -310,8 +445,8 @@ def main() -> int:
             user_mask,
             valid,
             depth,
-            combined,
-            masked_points,
+            filtered_valid,
+            filtered_points,
             stats,
             args.viz_max_points,
         )

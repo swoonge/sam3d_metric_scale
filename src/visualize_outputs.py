@@ -12,7 +12,6 @@ from typing import Optional
 import numpy as np
 from PIL import Image
 
-from sam3d_scale import mad_keep_mask
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,30 +43,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=80,
         help="Number of points per axis for visualization.",
-    )
-    parser.add_argument(
-        "--moge-border-margin",
-        type=int,
-        default=5,
-        help="Scale 단계와 동일한 경계 제거 픽셀 두께.",
-    )
-    parser.add_argument(
-        "--moge-depth-mad",
-        type=float,
-        default=3.5,
-        help="Scale 단계와 동일한 depth MAD 임계값.",
-    )
-    parser.add_argument(
-        "--moge-radius-mad",
-        type=float,
-        default=3.5,
-        help="Scale 단계와 동일한 radius MAD 임계값.",
-    )
-    parser.add_argument(
-        "--moge-min-points",
-        type=int,
-        default=500,
-        help="필터 후 포인트가 너무 적으면 필터를 무시.",
     )
     return parser.parse_args()
 
@@ -221,49 +196,6 @@ def load_moge_points(
     ys, xs = np.where(valid_mask)
     pixel_coords = (ys, xs, valid_mask.shape)
     return points, pixel_coords
-
-
-def build_moge_keep_mask(
-    points: np.ndarray,
-    pixel_coords: Optional[tuple[np.ndarray, np.ndarray, tuple[int, int]]],
-    border_margin: int,
-    depth_mad: float,
-    radius_mad: float,
-) -> Optional[np.ndarray]:
-    """MoGe 포인트에 대해 스케일 단계와 동일한 필터 keep mask 생성."""
-    if points is None or points.size == 0:
-        return None
-
-    keep = np.ones(points.shape[0], dtype=bool)
-    if border_margin > 0 and pixel_coords is not None:
-        ys, xs, shape = pixel_coords
-        if ys.shape[0] == keep.shape[0]:
-            height, width = shape
-            keep &= (
-                (ys >= border_margin)
-                & (ys < height - border_margin)
-                & (xs >= border_margin)
-                & (xs < width - border_margin)
-            )
-
-    filtered = points[keep]
-    if filtered.size == 0:
-        return np.zeros(points.shape[0], dtype=bool)
-
-    if depth_mad > 0 or radius_mad > 0:
-        sub_keep = np.ones(filtered.shape[0], dtype=bool)
-        if depth_mad > 0:
-            sub_keep &= mad_keep_mask(filtered[:, 2], depth_mad)
-        if radius_mad > 0:
-            center = np.median(filtered, axis=0)
-            radius = np.linalg.norm(filtered - center, axis=1)
-            sub_keep &= mad_keep_mask(radius, radius_mad)
-        indices = np.where(keep)[0]
-        keep_final = np.zeros(points.shape[0], dtype=bool)
-        keep_final[indices[sub_keep]] = True
-        return keep_final
-
-    return keep
 
 
 def colorize_values(values: np.ndarray) -> np.ndarray:
@@ -508,23 +440,7 @@ def main() -> int:
         moge_note = None
         if item["moge_npz"] is not None:
             # MoGe 포인트클라우드 플롯 생성
-            points, pixel_coords = load_moge_points(item["moge_npz"])
-            if points is not None:
-                keep = build_moge_keep_mask(
-                    points,
-                    pixel_coords,
-                    args.moge_border_margin,
-                    args.moge_depth_mad,
-                    args.moge_radius_mad,
-                )
-                if keep is not None and int(keep.sum()) >= args.moge_min_points:
-                    points = points[keep]
-                    if depth_full is not None and pixel_coords is not None:
-                        ys, xs, shape = pixel_coords
-                        if ys.shape[0] == keep.shape[0] and depth_full.shape == shape:
-                            depth_filtered = depth_full.copy()
-                            depth_filtered[ys[~keep], xs[~keep]] = np.nan
-                            depth_rgb = depth_to_rgb(depth_filtered)
+            points, _ = load_moge_points(item["moge_npz"])
             moge_fig, moge_note = build_pointcloud_figure(
                 points,
                 args.moge_max_points,

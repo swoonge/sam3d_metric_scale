@@ -14,6 +14,7 @@ repo_root="${script_dir}"
 sam2_env="sam2"
 sam3d_env="sam3d-objects"
 moge_env="moge"
+scale_env="teaserpp"
 
 default_image="${repo_root}/sam2/notebooks/videos/bedroom/00031.jpg"
 if [[ ! -f "${default_image}" && -f "${repo_root}/../sam2/notebooks/videos/bedroom/00031.jpg" ]]; then
@@ -39,10 +40,24 @@ moge_model="Ruicheng/moge-2-vitl-normal"
 scale_method="bbox_diag"
 min_pixels=100
 
-scale_use_ransac=0
-scale_ransac_iters=200
-scale_ransac_sample=64
-scale_ransac_thresh=0.02
+# TEASER++ 옵션(기본값)
+teaser_noise_bound=0
+teaser_nn_max_points=4000
+teaser_max_correspondences=3000
+teaser_gnc_factor=1.4
+teaser_rot_max_iters=100
+teaser_cbar2=1.0
+teaser_iterations=2
+teaser_correspondence="fpfh"
+teaser_fpfh_voxel=0
+teaser_fpfh_normal_radius=0
+teaser_fpfh_feature_radius=0
+teaser_icp_refine=1
+teaser_icp_max_iters=100
+teaser_icp_distance=0
+teaser_estimate_scaling=1
+teaser_show_viz=1
+teaser_viz_method="open3d"
 
 process_all=1
 
@@ -56,6 +71,7 @@ Options:
   --latest                  Process latest mask only (default: all)
   --sam2-env NAME           Conda env for SAM2 (default: sam2)
   --sam3d-env NAME          Conda env for SAM3D (default: sam3d-objects)
+  --scale-env NAME          Conda env for scale estimation (default: teaserpp)
   --sam3d-config PATH       SAM3D pipeline.yaml path
   --sam3d-seed INT          Seed for SAM3D inference
   --sam3d-compile           Enable compile flag for SAM3D
@@ -63,10 +79,6 @@ Options:
   --moge-model NAME         HF model id or local path
   --scale-method NAME       bbox_diag | bbox_max (default: bbox_diag)
   --min-pixels INT          Minimum valid pixels for scale
-  --scale-use-ransac        Enable RANSAC for scale estimation
-  --scale-ransac-iters N    RANSAC iterations (default: 200)
-  --scale-ransac-sample N   RANSAC sample size (default: 64)
-  --scale-ransac-thresh F   RANSAC inlier distance threshold
   -h, --help                Show this help
 USAGE
 }
@@ -116,6 +128,10 @@ while [[ $# -gt 0 ]]; do
       sam3d_env="$2"
       shift 2
       ;;
+    --scale-env)
+      scale_env="$2"
+      shift 2
+      ;;
     --sam3d-config)
       sam3d_config="$2"
       shift 2
@@ -142,22 +158,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --min-pixels)
       min_pixels="$2"
-      shift 2
-      ;;
-    --scale-use-ransac)
-      scale_use_ransac=1
-      shift
-      ;;
-    --scale-ransac-iters)
-      scale_ransac_iters="$2"
-      shift 2
-      ;;
-    --scale-ransac-sample)
-      scale_ransac_sample="$2"
-      shift 2
-      ;;
-    --scale-ransac-thresh)
-      scale_ransac_thresh="$2"
       shift 2
       ;;
     -h|--help)
@@ -248,15 +248,30 @@ for mask_path in "${masks[@]}"; do
     --seed "${sam3d_seed}" \
     ${compile_flag}
 
-  # 4) 스케일 추정(Umeyama ICP)
-  conda run -n "${sam3d_env}" python "${repo_root}/src/sam3d_scale.py" \
+  # 4) 스케일 추정(TEASER++ 기본 설정)
+  conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \
     --sam3d-ply "${output_path}" \
     --moge-npz "${moge_npz}" \
+    --algo teaserpp \
+    --output-dir "${scale_out_dir}" \
     --output-scale "${scale_txt}" \
     --output-scaled-ply "${scaled_ply}" \
-    $( [[ ${scale_use_ransac} -eq 1 ]] && echo "--use-ransac" ) \
-    --ransac-iters "${scale_ransac_iters}" \
-    --ransac-sample "${scale_ransac_sample}" \
-    --ransac-inlier-thresh "${scale_ransac_thresh}"
+    $( [[ ${teaser_estimate_scaling} -eq 1 ]] && echo "--teaser-estimate-scaling" ) \
+    --teaser-noise-bound "${teaser_noise_bound}" \
+    --teaser-nn-max-points "${teaser_nn_max_points}" \
+    --teaser-max-correspondences "${teaser_max_correspondences}" \
+    --teaser-gnc-factor "${teaser_gnc_factor}" \
+    --teaser-rot-max-iters "${teaser_rot_max_iters}" \
+    --teaser-cbar2 "${teaser_cbar2}" \
+    --teaser-iterations "${teaser_iterations}" \
+    --teaser-correspondence "${teaser_correspondence}" \
+    --teaser-fpfh-voxel "${teaser_fpfh_voxel}" \
+    --teaser-fpfh-normal-radius "${teaser_fpfh_normal_radius}" \
+    --teaser-fpfh-feature-radius "${teaser_fpfh_feature_radius}" \
+    $( [[ ${teaser_icp_refine} -eq 1 ]] && echo "--teaser-icp-refine" ) \
+    --teaser-icp-max-iters "${teaser_icp_max_iters}" \
+    --teaser-icp-distance "${teaser_icp_distance}" \
+    $( [[ ${teaser_show_viz} -eq 1 ]] && echo "--show-viz" ) \
+    --viz-method "${teaser_viz_method}"
 
 done
