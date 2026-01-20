@@ -1,7 +1,7 @@
-"""SAM3D inference 실행 및 PLY 저장/시각화를 담당하는 유틸리티.
+"""SAM3D inference 실행 및 PLY/mesh 저장/시각화를 담당하는 유틸리티.
 
 - 입력: 원본 이미지 + SAM2 마스크
-- 출력: SAM3D 결과 PLY
+- 출력: SAM3D 결과 PLY + mesh(glb/ply)
 - 옵션: 생성된 PLY를 다양한 백엔드로 시각화
 """
 
@@ -43,6 +43,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--ply", type=Path, default=None, help="PLY path for viz-only mode.")
+    parser.add_argument(
+        "--save-mesh",
+        dest="save_mesh",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save SAM3D mesh output (default: enabled).",
+    )
+    parser.add_argument(
+        "--mesh-format",
+        choices=["glb", "ply", "obj", "both", "all"],
+        default="all",
+        help="Mesh output format when saving (default: all).",
+    )
     parser.add_argument("--show-viz", action="store_true")
     parser.add_argument(
         "--viz-method",
@@ -294,9 +307,36 @@ def main() -> int:
         print("SAM3D output missing 'gs' key")
         return 1
 
+    output_keys = output.keys()
+    for key in output_keys:
+        print(f"SAM3D output key: {key}")
+        print(f"  Type: {type(output[key])}")
+        print(f"  Info: {str(output[key])}")
+
     # Gaussian Splat 결과를 PLY로 저장
     output["gs"].save_ply(str(output_path))
     print(f"SAM3D saved: {output_path}")
+
+    if args.save_mesh:
+        mesh = output.get("glb") or output.get("mesh")
+        if mesh is None:
+            print("SAM3D output missing mesh; skip mesh export.")
+        else:
+            try:
+                if args.mesh_format in ("glb", "both", "all"):
+                    mesh_path = output_path.with_name(f"{output_path.stem}_mesh.glb")
+                    mesh.export(mesh_path)
+                    print(f"SAM3D mesh saved: {mesh_path}")
+                if args.mesh_format in ("ply", "both", "all"):
+                    mesh_path = output_path.with_name(f"{output_path.stem}_mesh.ply")
+                    mesh.export(mesh_path)
+                    print(f"SAM3D mesh saved: {mesh_path}")
+                if args.mesh_format in ("obj", "all"):
+                    mesh_path = output_path.with_name(f"{output_path.stem}_mesh.obj")
+                    mesh.export(mesh_path)
+                    print(f"SAM3D mesh saved: {mesh_path}")
+            except Exception as exc:
+                print(f"Failed to save mesh: {exc}")
 
     if args.show_viz:
         # 필요할 때만 PLY 시각화 수행
