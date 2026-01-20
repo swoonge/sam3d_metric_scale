@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ./sam3d_metric_scale/run_full_pipeline.sh --image /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/datas/coffee_maker_sample.jpg
+
 # 통합 파이프라인:
 # 1) SAM2 UI로 마스크 생성
 # 2) MoGe로 metric depth/포인트 추출
