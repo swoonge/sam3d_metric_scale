@@ -92,9 +92,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teaser-iterations", type=int, default=1)
     parser.add_argument(
         "--teaser-correspondence",
-        choices=["fpfh"],
+        choices=["fpfh", "pcl_rops"],
         default="fpfh",
-        help="Correspondence mode for TEASER++ (fixed: fpfh).",
+        help="Correspondence mode for TEASER++.",
     )
     parser.add_argument(
         "--teaser-fpfh-voxel",
@@ -113,6 +113,36 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="FPFH feature radius (<=0 uses auto).",
+    )
+    parser.add_argument(
+        "--teaser-rops-voxel",
+        type=float,
+        default=0.0,
+        help="ROPS voxel size (<=0 uses auto).",
+    )
+    parser.add_argument(
+        "--teaser-rops-support-radius",
+        type=float,
+        default=0.0,
+        help="ROPS support radius (<=0 uses auto).",
+    )
+    parser.add_argument(
+        "--teaser-rops-mesh-radius",
+        type=float,
+        default=0.0,
+        help="ROPS mesh radius for triangulation (<=0 uses auto).",
+    )
+    parser.add_argument(
+        "--teaser-rops-bins",
+        type=int,
+        default=5,
+        help="ROPS partition bins.",
+    )
+    parser.add_argument(
+        "--teaser-rops-rotations",
+        type=int,
+        default=3,
+        help="ROPS rotation count.",
     )
     parser.add_argument(
         "--teaser-estimate-scaling",
@@ -202,6 +232,11 @@ def pick_algorithm(args: argparse.Namespace, src: np.ndarray, dst: np.ndarray) -
             fpfh_voxel=args.teaser_fpfh_voxel,
             fpfh_normal_radius=args.teaser_fpfh_normal_radius,
             fpfh_feature_radius=args.teaser_fpfh_feature_radius,
+            rops_voxel=args.teaser_rops_voxel,
+            rops_support_radius=args.teaser_rops_support_radius,
+            rops_mesh_radius=args.teaser_rops_mesh_radius,
+            rops_bins=args.teaser_rops_bins,
+            rops_rotations=args.teaser_rops_rotations,
             icp_refine=args.teaser_icp_refine,
             icp_max_iters=args.teaser_icp_max_iters,
             icp_distance=args.teaser_icp_distance,
@@ -284,7 +319,7 @@ def main() -> int:
         scaled_path = resolve_path(args.output_scaled_ply, Path.cwd())
     else:
         scaled_path = output_dir / f"{stem}_scaled.ply"
-    write_scaled_ply(ply, sam_points * scale, scaled_path)
+    write_scaled_ply(ply, sam_points * scale, scaled_path, scale)
 
     viz_src = sam_points
     if args.show_viz or args.save_viz:

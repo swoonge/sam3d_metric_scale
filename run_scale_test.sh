@@ -1,3 +1,4 @@
+# ./sam3d_metric_scale/run_scale_test.sh   --base_root /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/outputs/coffee_maker_sample   --sam3d_file /sam3d/coffee_maker_sample_001.ply   --moge_file /moge_scale/coffee_maker_sample_coffee_maker_sample_001.npz   --algo teaserpp   --teaser-estimate-scaling   --teaser-noise-bound 0   --teaser-nn-max-points 4000   --teaser-max-correspondences 3000   --teaser-gnc-factor 1.4   --teaser-rot-max-iters 100   --teaser-cbar2 1.0   --teaser-iterations 2   --teaser-correspondence fpfh   --teaser-fpfh-voxel 0   --teaser-fpfh-normal-radius 0   --teaser-fpfh-feature-radius 0   --teaser-icp-refine   --teaser-icp-max-iters 100   --teaser-icp-distance 0   --sam3d-env teaserpp   --show-viz --viz-method open3d
 # ./sam3d_metric_scale/run_scale_test.sh   --base_root /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/outputs/coffee_maker_sample   --sam3d_file /sam3d/coffee_maker_sample_000.ply   --moge_file /moge_scale/coffee_maker_sample_coffee_maker_sample_000.npz   --algo teaserpp   --teaser-estimate-scaling   --teaser-noise-bound 0   --teaser-nn-max-points 4000   --teaser-max-correspondences 3000   --teaser-gnc-factor 1.4   --teaser-rot-max-iters 100   --teaser-cbar2 1.0   --teaser-iterations 2   --teaser-correspondence fpfh   --teaser-fpfh-voxel 0   --teaser-fpfh-normal-radius 0   --teaser-fpfh-feature-radius 0   --teaser-icp-refine   --teaser-icp-max-iters 100   --teaser-icp-distance 0   --sam3d-env teaserpp   --show-viz --viz-method open3d
 
 #!/usr/bin/env bash
@@ -52,6 +53,11 @@ teaser_correspondence="fpfh"
 teaser_fpfh_voxel="0"
 teaser_fpfh_normal_radius="0"
 teaser_fpfh_feature_radius="0"
+teaser_rops_voxel=""
+teaser_rops_support_radius=""
+teaser_rops_mesh_radius=""
+teaser_rops_bins=""
+teaser_rops_rotations=""
 teaser_estimate_scaling=1
 teaser_icp_refine=0
 teaser_icp_max_iters=""
@@ -102,10 +108,15 @@ Options:
   --teaser-rot-max-iters N TEASER++ rotation max iters
   --teaser-cbar2 F       TEASER++ cbar2
   --teaser-iterations N  TEASER++ repeat passes (default: 1)
-  --teaser-correspondence MODE fpfh (default: fpfh)
+  --teaser-correspondence MODE fpfh | pcl_rops (default: fpfh)
   --teaser-fpfh-voxel F  FPFH voxel size (<=0 auto)
   --teaser-fpfh-normal-radius F FPFH normal radius (<=0 auto)
   --teaser-fpfh-feature-radius F FPFH feature radius (<=0 auto)
+  --teaser-rops-voxel F  ROPS voxel size (<=0 auto)
+  --teaser-rops-support-radius F ROPS support radius (<=0 auto)
+  --teaser-rops-mesh-radius F ROPS mesh radius (<=0 auto)
+  --teaser-rops-bins N   ROPS partition bins
+  --teaser-rops-rotations N ROPS rotation count
   --teaser-estimate-scaling Enable TEASER++ scaling
   --teaser-icp-refine    Enable ICP refinement after TEASER++
   --teaser-icp-max-iters N ICP max iterations
@@ -283,6 +294,26 @@ while [[ $# -gt 0 ]]; do
       ;;
     --teaser-fpfh-feature-radius)
       teaser_fpfh_feature_radius="$2"
+      shift 2
+      ;;
+    --teaser-rops-voxel)
+      teaser_rops_voxel="$2"
+      shift 2
+      ;;
+    --teaser-rops-support-radius)
+      teaser_rops_support_radius="$2"
+      shift 2
+      ;;
+    --teaser-rops-mesh-radius)
+      teaser_rops_mesh_radius="$2"
+      shift 2
+      ;;
+    --teaser-rops-bins)
+      teaser_rops_bins="$2"
+      shift 2
+      ;;
+    --teaser-rops-rotations)
+      teaser_rops_rotations="$2"
       shift 2
       ;;
     --teaser-estimate-scaling)
@@ -479,6 +510,21 @@ build_args() {
   fi
   if [[ -n "${teaser_fpfh_feature_radius}" ]]; then
     run_args+=(--teaser-fpfh-feature-radius "${teaser_fpfh_feature_radius}")
+  fi
+  if [[ -n "${teaser_rops_voxel}" ]]; then
+    run_args+=(--teaser-rops-voxel "${teaser_rops_voxel}")
+  fi
+  if [[ -n "${teaser_rops_support_radius}" ]]; then
+    run_args+=(--teaser-rops-support-radius "${teaser_rops_support_radius}")
+  fi
+  if [[ -n "${teaser_rops_mesh_radius}" ]]; then
+    run_args+=(--teaser-rops-mesh-radius "${teaser_rops_mesh_radius}")
+  fi
+  if [[ -n "${teaser_rops_bins}" ]]; then
+    run_args+=(--teaser-rops-bins "${teaser_rops_bins}")
+  fi
+  if [[ -n "${teaser_rops_rotations}" ]]; then
+    run_args+=(--teaser-rops-rotations "${teaser_rops_rotations}")
   fi
   if [[ ${teaser_estimate_scaling} -eq 1 ]]; then
     run_args+=(--teaser-estimate-scaling)

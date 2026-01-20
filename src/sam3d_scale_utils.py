@@ -31,14 +31,30 @@ def load_ply_points(path: Path) -> Tuple[object, np.ndarray]:
     return ply, points
 
 
-def write_scaled_ply(ply, points: np.ndarray, out_path: Path) -> None:
-    """기존 PLY 구조를 유지한 채 vertex 좌표만 교체해 저장."""
+def write_scaled_ply(ply, points: np.ndarray, out_path: Path, scale: float) -> None:
+    """기존 PLY 구조를 유지한 채 vertex 좌표/가우시안 스케일을 갱신해 저장."""
     from plyfile import PlyData, PlyElement
 
     vertex = ply["vertex"].data.copy()
     vertex["x"] = points[:, 0]
     vertex["y"] = points[:, 1]
     vertex["z"] = points[:, 2]
+    names = vertex.dtype.names or ()
+    if all(name in names for name in ("scale_0", "scale_1", "scale_2")):
+        # Gaussian splatting PLY stores log-scales in many pipelines.
+        # Heuristic: if median is negative, treat as log-space and add log(scale).
+        safe_scale = float(max(1e-12, abs(scale)))
+        scale_vals = vertex["scale_0"].astype(np.float32)
+        scale_median = float(np.median(scale_vals))
+        if scale_median < 0:
+            log_scale = float(np.log(safe_scale))
+            vertex["scale_0"] += log_scale
+            vertex["scale_1"] += log_scale
+            vertex["scale_2"] += log_scale
+        else:
+            vertex["scale_0"] *= safe_scale
+            vertex["scale_1"] *= safe_scale
+            vertex["scale_2"] *= safe_scale
 
     elements = []
     for element in ply.elements:
