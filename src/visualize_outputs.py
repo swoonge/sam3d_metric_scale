@@ -1,7 +1,7 @@
 """결과 폴더 기반 통합 시각화(Gradio UI).
 
 - 입력: outputs/<image_stem>/ 하위의 mask/moge/sam3d 결과
-- 출력: 이미지/마스크/깊이/포인트클라우드/PLY 뷰어를 한 화면에 제공
+- 출력: 이미지/마스크/깊이/포인트클라우드/PLY/mesh 뷰어를 한 화면에 제공
 """
 
 import argparse
@@ -347,6 +347,56 @@ def build_pointcloud_figure(
         return None, f"MoGe PC: {exc}"
 
 
+def load_ply_points(path: Path) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    """PLY에서 포인트/색상 로드."""
+    try:
+        from plyfile import PlyData
+    except ImportError:
+        raise RuntimeError("plyfile is required to parse PLY.")
+
+    ply = PlyData.read(str(path))
+    if "vertex" not in ply:
+        raise RuntimeError("PLY file missing vertex data.")
+    vertex = ply["vertex"]
+    names = vertex.data.dtype.names or ()
+    points = np.stack(
+        (vertex["x"], vertex["y"], vertex["z"]),
+        axis=1,
+    ).astype(np.float32)
+
+    colors = None
+    if all(name in names for name in ("red", "green", "blue")):
+        colors = np.stack(
+            (vertex["red"], vertex["green"], vertex["blue"]),
+            axis=1,
+        ).astype(np.float32)
+        if colors.max() > 1.0:
+            colors = colors / 255.0
+    elif all(name in names for name in ("f_dc_0", "f_dc_1", "f_dc_2")):
+        colors = np.stack(
+            (vertex["f_dc_0"], vertex["f_dc_1"], vertex["f_dc_2"]),
+            axis=1,
+        ).astype(np.float32)
+        colors = np.clip(colors + 0.5, 0.0, 1.0)
+
+    return points, colors
+
+
+def build_pointcloud_plot_from_ply(
+    path: Optional[Path],
+    max_points: int,
+    axis_fraction: float,
+    axis_steps: int,
+) -> tuple[object, Optional[str]]:
+    if path is None or not path.exists():
+        return None, "PLY missing"
+    try:
+        points, _ = load_ply_points(path)
+    except Exception as exc:
+        return None, f"PLY load failed: {exc}"
+    return build_pointcloud_figure(points, max_points, axis_fraction, axis_steps)
+
+
 def find_moge_npz(moge_dir: Path, mask_stem: str) -> Optional[Path]:
     """마스크 stem에 대응되는 MoGe NPZ 파일 탐색."""
     candidates = sorted(moge_dir.glob(f"*_{mask_stem}.npz"))
@@ -355,12 +405,26 @@ def find_moge_npz(moge_dir: Path, mask_stem: str) -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
+def find_sam3d_mesh(sam3d_dir: Path, mask_stem: str) -> Optional[Path]:
+    """SAM3D 메쉬 출력(glb) 탐색."""
+    candidates = [
+        sam3d_dir / f"{mask_stem}_mesh.glb",
+        sam3d_dir / f"{mask_stem}.glb",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def collect_items(output_root: Path):
     """출력 루트 기준으로 mask/moge/sam3d/scale 파일 묶음을 구성."""
     mask_dir = output_root / "sam2_masks"
     moge_dir = output_root / "moge_scale"
     sam3d_dir = output_root / "sam3d"
     scale_dir = output_root / "sam3d_scale"
+    analysis_dir = output_root / "sam3d_analysis"
+    camera_scale_dir = output_root / "sam3d_camera_scale_viz"
 
     masks = sorted(mask_dir.glob("*.png"))
     items = []
@@ -368,16 +432,44 @@ def collect_items(output_root: Path):
         stem = mask_path.stem
         moge_npz = find_moge_npz(moge_dir, stem)
         sam3d_ply = sam3d_dir / f"{stem}.ply"
+        sam3d_mesh = find_sam3d_mesh(sam3d_dir, stem)
         scale_txt = scale_dir / f"{stem}_scale.txt"
         scaled_ply = scale_dir / f"{stem}_scaled.ply"
+        analysis_depth = analysis_dir / f"{stem}_pointmap_depth.png"
+        analysis_pointmap = analysis_dir / f"{stem}_pointmap_cloud.ply"
+        analysis_coords = analysis_dir / f"{stem}_coords_cloud.ply"
+        analysis_md = analysis_dir / f"{stem}_analysis.md"
+        camera_dir = camera_scale_dir / stem
+        camera_moge_depth = camera_dir / "03_moge_depth_full.png"
+        camera_pointmap_depth = camera_dir / "04_pointmap_depth.png"
+        camera_sam3d_ply = camera_dir / "05_sam3d_gaussian.ply"
+        camera_scaled_ply = camera_dir / "06_sam3d_scaled.ply"
+        camera_camera_ply = camera_dir / "07_sam3d_camera.ply"
+        camera_depth = camera_dir / "08_camera_depth.png"
+        camera_summary = camera_dir / "summary.txt"
         items.append(
             {
                 "stem": stem,
                 "mask": mask_path,
                 "moge_npz": moge_npz,
                 "sam3d_ply": sam3d_ply if sam3d_ply.exists() else None,
+                "sam3d_mesh": sam3d_mesh,
                 "scale_txt": scale_txt if scale_txt.exists() else None,
                 "scaled_ply": scaled_ply if scaled_ply.exists() else None,
+                "analysis_depth": analysis_depth if analysis_depth.exists() else None,
+                "analysis_pointmap": analysis_pointmap if analysis_pointmap.exists() else None,
+                "analysis_coords": analysis_coords if analysis_coords.exists() else None,
+                "analysis_md": analysis_md if analysis_md.exists() else None,
+                "camera_dir": camera_dir if camera_dir.exists() else None,
+                "camera_moge_depth": camera_moge_depth if camera_moge_depth.exists() else None,
+                "camera_pointmap_depth": camera_pointmap_depth
+                if camera_pointmap_depth.exists()
+                else None,
+                "camera_sam3d_ply": camera_sam3d_ply if camera_sam3d_ply.exists() else None,
+                "camera_scaled_ply": camera_scaled_ply if camera_scaled_ply.exists() else None,
+                "camera_camera_ply": camera_camera_ply if camera_camera_ply.exists() else None,
+                "camera_depth": camera_depth if camera_depth.exists() else None,
+                "camera_summary": camera_summary if camera_summary.exists() else None,
             }
         )
     return items
@@ -392,12 +484,26 @@ def print_summary(image_path: Path, items) -> None:
         mask_path = item["mask"]
         moge_npz = item["moge_npz"]
         sam3d_ply = item["sam3d_ply"]
+        sam3d_mesh = item["sam3d_mesh"]
+        analysis_depth = item["analysis_depth"]
+        analysis_pointmap = item["analysis_pointmap"]
+        analysis_coords = item["analysis_coords"]
+        analysis_md = item["analysis_md"]
+        camera_moge_depth = item["camera_moge_depth"]
+        camera_pointmap_depth = item["camera_pointmap_depth"]
+        camera_sam3d_ply = item["camera_sam3d_ply"]
+        camera_scaled_ply = item["camera_scaled_ply"]
+        camera_camera_ply = item["camera_camera_ply"]
+        camera_depth = item["camera_depth"]
+        camera_summary = item["camera_summary"]
         moge_status = str(moge_npz) if moge_npz else "missing"
         sam3d_status = str(sam3d_ply) if sam3d_ply else "missing"
         print(f"- {stem}")
         print(f"  mask: {mask_path}")
         print(f"  moge: {moge_status}")
         print(f"  sam3d: {sam3d_status}")
+        if sam3d_mesh:
+            print(f"  sam3d mesh: {sam3d_mesh}")
 
 
 def main() -> int:
@@ -435,6 +541,10 @@ def main() -> int:
         mask_rgb = mask_to_rgb(mask)
         depth_full = load_moge_depth(item["moge_npz"]) if item["moge_npz"] else None
         depth_rgb = depth_to_rgb(depth_full) if depth_full is not None else None
+        analysis_depth = item["analysis_depth"]
+        analysis_pointmap = item["analysis_pointmap"]
+        analysis_coords = item["analysis_coords"]
+        analysis_md = item["analysis_md"]
 
         moge_fig = None
         moge_note = None
@@ -448,8 +558,19 @@ def main() -> int:
                 args.moge_axis_steps,
             )
 
-        sam3d_path = str(item["sam3d_ply"]) if item["sam3d_ply"] else None
-        scaled_path = str(item["scaled_ply"]) if item["scaled_ply"] else None
+        sam3d_fig, sam3d_note = build_pointcloud_plot_from_ply(
+            item["sam3d_ply"],
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
+        sam3d_mesh_path = str(item["sam3d_mesh"]) if item["sam3d_mesh"] else None
+        scaled_fig, scaled_note = build_pointcloud_plot_from_ply(
+            item["scaled_ply"],
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
         scale_info = "Scale: N/A"
         if item["scale_txt"] is not None:
             try:
@@ -465,18 +586,92 @@ def main() -> int:
             notes.append(moge_note)
         if item["sam3d_ply"] is None:
             notes.append("SAM3D: missing PLY")
+        if item["sam3d_mesh"] is None:
+            notes.append("SAM3D: missing mesh")
         if item["scale_txt"] is None:
             notes.append("Scale: missing TXT")
+        if item["analysis_depth"] is None:
+            notes.append("Analysis: missing pointmap depth")
+        if item["analysis_pointmap"] is None:
+            notes.append("Analysis: missing pointmap cloud")
+        if sam3d_note and sam3d_note != "PLY missing":
+            notes.append(f"SAM3D PLY: {sam3d_note}")
+        if scaled_note and scaled_note != "PLY missing":
+            notes.append(f"Scaled PLY: {scaled_note}")
         status = "OK" if not notes else " / ".join(notes)
+        analysis_text = None
+        if analysis_md is not None:
+            try:
+                analysis_text = analysis_md.read_text(encoding="utf-8")
+            except Exception:
+                analysis_text = None
+        analysis_pointmap_fig, analysis_pointmap_note = build_pointcloud_plot_from_ply(
+            analysis_pointmap,
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
+        analysis_coords_fig, analysis_coords_note = build_pointcloud_plot_from_ply(
+            analysis_coords,
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
+        if analysis_pointmap_note and analysis_pointmap_note != "PLY missing":
+            notes.append(f"Analysis pointmap: {analysis_pointmap_note}")
+        if analysis_coords_note and analysis_coords_note != "PLY missing":
+            notes.append(f"Analysis coords: {analysis_coords_note}")
+        camera_sam3d_fig, camera_sam3d_note = build_pointcloud_plot_from_ply(
+            camera_sam3d_ply,
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
+        camera_scaled_fig, camera_scaled_note = build_pointcloud_plot_from_ply(
+            camera_scaled_ply,
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
+        camera_camera_fig, camera_camera_note = build_pointcloud_plot_from_ply(
+            camera_camera_ply,
+            args.moge_max_points,
+            args.moge_axis_fraction,
+            args.moge_axis_steps,
+        )
+        if camera_sam3d_note and camera_sam3d_note != "PLY missing":
+            notes.append(f"Camera viz SAM3D: {camera_sam3d_note}")
+        if camera_scaled_note and camera_scaled_note != "PLY missing":
+            notes.append(f"Camera viz scaled: {camera_scaled_note}")
+        if camera_camera_note and camera_camera_note != "PLY missing":
+            notes.append(f"Camera viz camera: {camera_camera_note}")
+        camera_summary_text = None
+        if camera_summary is not None:
+            try:
+                camera_summary_text = camera_summary.read_text(encoding="utf-8")
+            except Exception:
+                camera_summary_text = None
         return (
             image_rgb,
             mask_rgb,
             depth_rgb,
             moge_fig,
-            sam3d_path,
-            scaled_path,
+            sam3d_mesh_path,
+            sam3d_fig,
+            scaled_fig,
             status,
             scale_info,
+            str(analysis_depth) if analysis_depth else None,
+            analysis_pointmap_fig,
+            analysis_coords_fig,
+            analysis_text,
+            str(camera_moge_depth) if camera_moge_depth else None,
+            str(camera_pointmap_depth) if camera_pointmap_depth else None,
+            camera_sam3d_fig,
+            camera_scaled_fig,
+            camera_camera_fig,
+            str(camera_depth) if camera_depth else None,
+            camera_summary_text,
         )
 
     with gr.Blocks() as demo:
@@ -496,9 +691,26 @@ def main() -> int:
         with gr.Row():
             moge_pc_view = gr.Plot(label="MoGe point cloud (axes)")
         with gr.Row():
-            model_view = gr.Model3D(label="SAM3D PLY")
+            mesh_view = gr.Model3D(label="SAM3D Mesh (GLB)")
         with gr.Row():
-            scaled_view = gr.Model3D(label="SAM3D scaled PLY")
+            sam3d_ply_view = gr.Plot(label="SAM3D Gaussian PLY (point cloud)")
+            scaled_ply_view = gr.Plot(label="SAM3D scaled Gaussian (point cloud)")
+        with gr.Row():
+            analysis_depth_view = gr.Image(label="Analysis: pointmap depth")
+        with gr.Row():
+            analysis_pointmap_view = gr.Plot(label="Analysis: pointmap cloud")
+            analysis_coords_view = gr.Plot(label="Analysis: sparse coords")
+        analysis_md_view = gr.Markdown()
+        gr.Markdown("## SAM3D Camera/Scale Viz")
+        with gr.Row():
+            camera_moge_depth_view = gr.Image(label="CameraViz: MoGe depth (full)")
+            camera_pointmap_depth_view = gr.Image(label="CameraViz: pointmap depth")
+            camera_depth_view = gr.Image(label="CameraViz: camera depth")
+        with gr.Row():
+            camera_sam3d_view = gr.Plot(label="CameraViz: SAM3D Gaussian")
+            camera_scaled_view = gr.Plot(label="CameraViz: scaled SAM3D")
+            camera_camera_view = gr.Plot(label="CameraViz: camera frame")
+        camera_summary_view = gr.Markdown()
 
         # 드롭다운 변경 시 결과 갱신
         dropdown.change(
@@ -509,10 +721,22 @@ def main() -> int:
                 mask_view,
                 depth_view,
                 moge_pc_view,
-                model_view,
-                scaled_view,
+                mesh_view,
+                sam3d_ply_view,
+                scaled_ply_view,
                 status,
                 scale_info,
+                analysis_depth_view,
+                analysis_pointmap_view,
+                analysis_coords_view,
+                analysis_md_view,
+                camera_moge_depth_view,
+                camera_pointmap_depth_view,
+                camera_sam3d_view,
+                camera_scaled_view,
+                camera_camera_view,
+                camera_depth_view,
+                camera_summary_view,
             ],
         )
         demo.load(
@@ -523,10 +747,22 @@ def main() -> int:
                 mask_view,
                 depth_view,
                 moge_pc_view,
-                model_view,
-                scaled_view,
+                mesh_view,
+                sam3d_ply_view,
+                scaled_ply_view,
                 status,
                 scale_info,
+                analysis_depth_view,
+                analysis_pointmap_view,
+                analysis_coords_view,
+                analysis_md_view,
+                camera_moge_depth_view,
+                camera_pointmap_depth_view,
+                camera_sam3d_view,
+                camera_scaled_view,
+                camera_camera_view,
+                camera_depth_view,
+                camera_summary_view,
             ],
         )
 
