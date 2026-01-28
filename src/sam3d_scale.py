@@ -11,9 +11,6 @@ from pathlib import Path
 import numpy as np
 
 from sam3d_scale_icp import estimate_scale as estimate_scale_icp
-from sam3d_scale_ransac import estimate_scale as estimate_scale_ransac
-from sam3d_scale_rms import estimate_scale as estimate_scale_rms
-from sam3d_scale_super4pcs import estimate_scale as estimate_scale_super4pcs
 from sam3d_scale_teaserpp import estimate_scale as estimate_scale_teaserpp
 from sam3d_scale_utils import (
     load_moge_points,
@@ -38,10 +35,7 @@ def parse_args() -> argparse.Namespace:
         "--algo",
         choices=[
             "icp",
-            "ransac",
-            "rms",
             "teaserpp",
-            "super4pcs",
         ],
         default="icp",
         help="Scale estimation algorithm.",
@@ -63,20 +57,6 @@ def parse_args() -> argparse.Namespace:
         help="Use closest ratio of matches for ICP update (0<r<=1).",
     )
 
-    # RANSAC 옵션
-    parser.add_argument("--ransac-iters", type=int, default=800)
-    parser.add_argument("--ransac-sample", type=int, default=128)
-    parser.add_argument(
-        "--ransac-inlier-thresh",
-        type=float,
-        default=0.0,
-        help="Inlier threshold (<=0 uses auto threshold).",
-    )
-    parser.add_argument("--ransac-nn-max-points", type=int, default=8000)
-
-    # RMS 옵션
-    parser.add_argument("--rms-nn-max-points", type=int, default=8000)
-
     # TEASER++ 옵션
     parser.add_argument(
         "--teaser-noise-bound",
@@ -92,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teaser-iterations", type=int, default=1)
     parser.add_argument(
         "--teaser-correspondence",
-        choices=["fpfh", "pcl_rops"],
+        choices=["fpfh"],
         default="fpfh",
         help="Correspondence mode for TEASER++.",
     )
@@ -115,36 +95,6 @@ def parse_args() -> argparse.Namespace:
         help="FPFH feature radius (<=0 uses auto).",
     )
     parser.add_argument(
-        "--teaser-rops-voxel",
-        type=float,
-        default=0.0,
-        help="ROPS voxel size (<=0 uses auto).",
-    )
-    parser.add_argument(
-        "--teaser-rops-support-radius",
-        type=float,
-        default=0.0,
-        help="ROPS support radius (<=0 uses auto).",
-    )
-    parser.add_argument(
-        "--teaser-rops-mesh-radius",
-        type=float,
-        default=0.0,
-        help="ROPS mesh radius for triangulation (<=0 uses auto).",
-    )
-    parser.add_argument(
-        "--teaser-rops-bins",
-        type=int,
-        default=5,
-        help="ROPS partition bins.",
-    )
-    parser.add_argument(
-        "--teaser-rops-rotations",
-        type=int,
-        default=3,
-        help="ROPS rotation count.",
-    )
-    parser.add_argument(
         "--teaser-estimate-scaling",
         action="store_true",
         help="Enable scale estimation in TEASER++ (default: off).",
@@ -161,17 +111,6 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="ICP max correspondence distance (<=0 uses noise bound).",
     )
-
-    # Super4PCS 옵션
-    parser.add_argument("--super4pcs-bin", type=str, default=None)
-    parser.add_argument("--super4pcs-overlap", type=float, default=0.7)
-    parser.add_argument(
-        "--super4pcs-delta",
-        type=float,
-        default=0.0,
-        help="Delta (<=0 uses auto based on bbox diag).",
-    )
-    parser.add_argument("--super4pcs-timeout", type=int, default=1000)
 
     # 시각화 옵션
     parser.add_argument("--show-viz", action="store_true")
@@ -206,16 +145,6 @@ def pick_algorithm(args: argparse.Namespace, src: np.ndarray, dst: np.ndarray) -
             trim_ratio=args.icp_trim_ratio,
             seed=args.seed,
         )
-    if args.algo == "ransac":
-        return estimate_scale_ransac(
-            src,
-            dst,
-            iters=args.ransac_iters,
-            sample_size=args.ransac_sample,
-            inlier_thresh=args.ransac_inlier_thresh,
-            nn_max_points=args.ransac_nn_max_points,
-            seed=args.seed,
-        )
     if args.algo == "teaserpp":
         return estimate_scale_teaserpp(
             src,
@@ -232,30 +161,18 @@ def pick_algorithm(args: argparse.Namespace, src: np.ndarray, dst: np.ndarray) -
             fpfh_voxel=args.teaser_fpfh_voxel,
             fpfh_normal_radius=args.teaser_fpfh_normal_radius,
             fpfh_feature_radius=args.teaser_fpfh_feature_radius,
-            rops_voxel=args.teaser_rops_voxel,
-            rops_support_radius=args.teaser_rops_support_radius,
-            rops_mesh_radius=args.teaser_rops_mesh_radius,
-            rops_bins=args.teaser_rops_bins,
-            rops_rotations=args.teaser_rops_rotations,
             icp_refine=args.teaser_icp_refine,
             icp_max_iters=args.teaser_icp_max_iters,
             icp_distance=args.teaser_icp_distance,
             seed=args.seed,
         )
-    if args.algo == "super4pcs":
-        return estimate_scale_super4pcs(
-            src,
-            dst,
-            bin_path=args.super4pcs_bin,
-            overlap=args.super4pcs_overlap,
-            delta=args.super4pcs_delta,
-            timeout=args.super4pcs_timeout,
-            seed=args.seed,
-        )
-    return estimate_scale_rms(
+    return estimate_scale_icp(
         src,
         dst,
-        nn_max_points=args.rms_nn_max_points,
+        max_iters=args.icp_max_iters,
+        tolerance=args.icp_tolerance,
+        nn_max_points=args.icp_nn_max_points,
+        trim_ratio=args.icp_trim_ratio,
         seed=args.seed,
     )
 

@@ -1,5 +1,5 @@
-# ./sam3d_metric_scale/run_visualize_outputs.sh   --output-root /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/outputs/coffee_maker_sample
 #!/usr/bin/env bash
+# ./sam3d_metric_scale/run_visualize_outputs.sh   --output-root /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/outputs/coffee_maker_sample
 set -euo pipefail
 
 # 통합 시각화 UI 실행 스크립트

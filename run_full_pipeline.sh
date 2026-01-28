@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # ./sam3d_metric_scale/run_full_pipeline.sh --image /home/vision/Sim2Real_Data_Augmentation_for_VLA/sam3d_metric_scale/datas/coffee_maker_sample.jpg
+# ./sam3d_metric_scale/run_full_pipeline.sh --image /path/to/rgb.png --depth-image /path/to/depth.png --output-base outputs/demo
 
 # 통합 파이프라인:
 # 1) SAM2 UI로 마스크 생성
@@ -23,6 +24,9 @@ if [[ ! -f "${default_image}" && -f "${repo_root}/../sam2/notebooks/videos/bedro
   default_image="${repo_root}/../sam2/notebooks/videos/bedroom/00031.jpg"
 fi
 image_path="${default_image}"
+depth_image_path=""
+# real depth scale (e.g., 0.001 if depth is in millimeters)
+depth_scale="auto"
 
 # 출력 베이스 디렉터리
 output_base="${repo_root}/outputs"
@@ -41,6 +45,12 @@ sam3d_compile=0
 moge_model="Ruicheng/moge-2-vitl-normal"
 scale_method="bbox_diag"
 min_pixels=100
+
+# real depth filtering (stricter than MoGe)
+real_border_margin=5
+real_depth_mad=2.5
+real_radius_mad=2.5
+real_min_points=500
 
 # TEASER++ 옵션(기본값)
 teaser_noise_bound=0
@@ -63,12 +73,19 @@ teaser_viz_method="open3d"
 
 process_all=1
 
+# disable open3d viz in headless environments
+if [[ -z "${DISPLAY-}" ]]; then
+  teaser_show_viz=0
+fi
+
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [options]
 
 Options:
   --image PATH              Input image path for SAM2 UI
+  --depth-image PATH        Optional real depth image path (if provided, generate real_scale outputs)
+  --depth-scale VAL         real depth scale (auto | numeric, default: auto)
   --output-base PATH        Base output directory (default: outputs)
   --latest                  Process latest mask only (default: all)
   --sam2-env NAME           Conda env for SAM2 (default: sam2)
@@ -112,6 +129,14 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
       image_path="$2"
+      shift 2
+      ;;
+    --depth-image)
+      depth_image_path="$2"
+      shift 2
+      ;;
+    --depth-scale)
+      depth_scale="$2"
       shift 2
       ;;
     --output-base)
@@ -183,6 +208,9 @@ fi
 image_path="$(resolve_path "${image_path}")"
 output_base="$(resolve_path "${output_base}")"
 sam3d_config="$(resolve_path "${sam3d_config}")"
+if [[ -n "${depth_image_path}" ]]; then
+  depth_image_path="$(resolve_path "${depth_image_path}")"
+fi
 
 image_stem="$(basename "${image_path}")"
 image_stem="${image_stem%.*}"
@@ -190,12 +218,16 @@ output_root="$(make_output_root "${output_base}" "${image_stem}")"
 mask_dir="${output_root}/sam2_masks"
 sam3d_out_dir="${output_root}/sam3d"
 moge_out_dir="${output_root}/moge_scale"
+real_out_dir="${output_root}/real_scale"
 scale_out_dir="${output_root}/sam3d_scale"
 
 mkdir -p "${output_root}"
 echo "Output root: ${output_root}"
 # 원본 이미지는 결과 루트에 복사(재현성/추적 목적)
 cp -n "${image_path}" "${output_root}/" 2>/dev/null || true
+if [[ -n "${depth_image_path}" ]]; then
+  cp -n "${depth_image_path}" "${output_root}/" 2>/dev/null || true
+fi
 
 # 1) SAM2 UI 실행(마스크 생성)
 conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
@@ -203,6 +235,9 @@ conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
   --output-dir "${mask_dir}"
 
 mkdir -p "${sam3d_out_dir}" "${moge_out_dir}" "${scale_out_dir}"
+if [[ -n "${depth_image_path}" ]]; then
+  mkdir -p "${real_out_dir}"
+fi
 
 if [[ ${process_all} -eq 1 ]]; then
   mapfile -t masks < <(ls -1 "${mask_dir}/${image_stem}"_*.png 2>/dev/null || true)
@@ -224,6 +259,9 @@ for mask_path in "${masks[@]}"; do
   mask_stem="${mask_name%.png}"
   output_path="${sam3d_out_dir}/${mask_stem}.ply"
   moge_npz="${moge_out_dir}/${image_stem}_${mask_stem}.npz"
+  real_npz=""
+  real_json=""
+  real_ply=""
   scale_txt="${scale_out_dir}/${mask_stem}_scale.txt"
   scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
 
@@ -235,6 +273,229 @@ for mask_path in "${masks[@]}"; do
     --output-dir "${moge_out_dir}" \
     --scale-method "${scale_method}" \
     --min-pixels "${min_pixels}"
+
+  # 2-1) Real depth 기반 outputs (옵션)
+  if [[ -n "${depth_image_path}" ]]; then
+    real_npz="${real_out_dir}/${image_stem}_${mask_stem}.npz"
+    real_json="${real_out_dir}/${image_stem}_${mask_stem}.json"
+    real_ply="${real_out_dir}/${image_stem}_${mask_stem}.ply"
+
+    real_tmp_script="$(mktemp "${output_root}/real_depth_XXXX.py")"
+    cat <<'PY' > "${real_tmp_script}"
+import json
+import os
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+def mad_keep_mask(values: np.ndarray, thresh: float) -> np.ndarray:
+    if thresh <= 0:
+        return np.ones(values.shape[0], dtype=bool)
+    median = np.median(values)
+    mad = np.median(np.abs(values - median))
+    if mad < 1e-8:
+        return np.ones(values.shape[0], dtype=bool)
+    z_score = 0.6745 * (values - median) / mad
+    return np.abs(z_score) <= thresh
+
+def build_filter_keep_mask(points: np.ndarray, ys: np.ndarray, xs: np.ndarray, shape: tuple[int, int],
+                           border_margin: int, depth_mad: float, radius_mad: float) -> np.ndarray:
+    keep = np.ones(points.shape[0], dtype=bool)
+    if border_margin > 0 and ys.shape[0] == points.shape[0]:
+        height, width = shape
+        keep &= (ys >= border_margin) & (ys < height - border_margin) & (xs >= border_margin) & (xs < width - border_margin)
+    filtered = points[keep]
+    if filtered.size == 0:
+        return np.zeros(points.shape[0], dtype=bool)
+    if depth_mad > 0 or radius_mad > 0:
+        sub_keep = np.ones(filtered.shape[0], dtype=bool)
+        if depth_mad > 0:
+            sub_keep &= mad_keep_mask(filtered[:, 2], depth_mad)
+        if radius_mad > 0:
+            center = np.median(filtered, axis=0)
+            radius = np.linalg.norm(filtered - center, axis=1)
+            sub_keep &= mad_keep_mask(radius, radius_mad)
+        indices = np.where(keep)[0]
+        keep_final = np.zeros(points.shape[0], dtype=bool)
+        keep_final[indices[sub_keep]] = True
+        return keep_final
+    return keep
+
+image_path = Path(os.environ["IMAGE_PATH"])
+depth_path = Path(os.environ["DEPTH_PATH"])
+mask_path = Path(os.environ["MASK_PATH"])
+output_npz = Path(os.environ["OUTPUT_NPZ"])
+output_json = Path(os.environ["OUTPUT_JSON"])
+output_ply = Path(os.environ["OUTPUT_PLY"])
+min_pixels = int(os.environ.get("MIN_PIXELS", "100"))
+
+border_margin = int(os.environ.get("REAL_BORDER_MARGIN", "5"))
+depth_mad = float(os.environ.get("REAL_DEPTH_MAD", "2.5"))
+radius_mad = float(os.environ.get("REAL_RADIUS_MAD", "2.5"))
+min_points = int(os.environ.get("REAL_MIN_POINTS", "500"))
+
+if not depth_path.exists():
+    raise SystemExit(f"Missing depth image: {depth_path}")
+if not mask_path.exists():
+    raise SystemExit(f"Missing mask: {mask_path}")
+
+depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+if depth is None:
+    raise SystemExit(f"Failed to read depth image: {depth_path}")
+if depth.ndim == 3:
+    depth = depth[:, :, 0]
+depth = depth.astype(np.float32)
+
+depth_scale_raw = os.environ.get("DEPTH_SCALE", "auto")
+if depth_scale_raw == "auto":
+    # heuristic: uint16 or large values -> millimeters
+    if depth.dtype.kind in ("u", "i") and depth.max() > 50:
+        depth_scale_value = 0.001
+    elif depth.max() > 20 and depth.max() < 10000:
+        depth_scale_value = 0.001
+    else:
+        depth_scale_value = 1.0
+else:
+    depth_scale_value = float(depth_scale_raw)
+depth = depth * depth_scale_value
+
+mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
+if mask is None:
+    raise SystemExit(f"Failed to read mask: {mask_path}")
+if mask.ndim == 3:
+    mask = mask[:, :, -1]
+mask = mask > 0
+
+if mask.shape != depth.shape:
+    mask = cv2.resize(
+        mask.astype(np.uint8),
+        (depth.shape[1], depth.shape[0]),
+        interpolation=cv2.INTER_NEAREST,
+    ).astype(bool)
+
+valid = mask & np.isfinite(depth) & (depth > 0)
+if valid.sum() < min_pixels:
+    raise SystemExit(f"Not enough valid pixels: {int(valid.sum())}")
+
+ys, xs = np.where(valid)
+depth_masked = depth[valid]
+
+height, width = depth.shape
+cx = (width - 1) / 2.0
+cy = (height - 1) / 2.0
+focal = float(max(height, width))
+z = depth_masked
+x = (xs - cx) * z / focal
+y = -(ys - cy) * z / focal
+points = np.stack([x, y, z], axis=1).astype(np.float32)
+
+keep = build_filter_keep_mask(points, ys, xs, depth.shape, border_margin, depth_mad, radius_mad)
+filter_applied = int(keep.sum()) >= min_points
+if not filter_applied:
+    keep = np.ones(points.shape[0], dtype=bool)
+filtered_points = points[keep]
+filtered_depth = depth_masked[keep]
+filtered_valid = valid.copy()
+if keep.shape[0] == ys.shape[0]:
+    filtered_valid[ys[~keep], xs[~keep]] = False
+if filtered_points.size == 0:
+    filtered_points = points
+    filtered_depth = depth_masked
+    filtered_valid = valid
+    filter_applied = False
+
+points = filtered_points
+depth_masked = filtered_depth
+
+def compute_scale(points_np: np.ndarray) -> dict:
+    mins = points_np.min(axis=0)
+    maxs = points_np.max(axis=0)
+    size = maxs - mins
+    diag = float(np.linalg.norm(size))
+    max_dim = float(size.max())
+    return {
+        "bbox_min": mins.tolist(),
+        "bbox_max": maxs.tolist(),
+        "bbox_size": size.tolist(),
+        "bbox_diag": diag,
+        "bbox_max_dim": max_dim,
+        "scale_method": "bbox_diag",
+    }
+
+stats = {
+    "image": str(image_path),
+    "depth_image": str(depth_path),
+    "mask": str(mask_path),
+    "model": "real_depth",
+    "depth_scale": float(depth_scale_value),
+    "points_count_raw": int(points.shape[0]),
+    "points_count": int(points.shape[0]),
+    "filter_applied": bool(filter_applied),
+    "filter_border_margin": int(border_margin),
+    "filter_depth_mad": float(depth_mad),
+    "filter_radius_mad": float(radius_mad),
+    "filter_min_points": int(min_points),
+    "depth_mean": float(depth_masked.mean()),
+    "depth_median": float(np.median(depth_masked)),
+    "depth_min": float(depth_masked.min()),
+    "depth_max": float(depth_masked.max()),
+}
+stats.update(compute_scale(points))
+
+output_npz.parent.mkdir(parents=True, exist_ok=True)
+output_json.parent.mkdir(parents=True, exist_ok=True)
+output_ply.parent.mkdir(parents=True, exist_ok=True)
+
+with output_json.open("w", encoding="utf-8") as f:
+    json.dump(stats, f, indent=2)
+
+np.savez_compressed(
+    output_npz,
+    mask=mask.astype(np.uint8),
+    valid_mask=filtered_valid.astype(np.uint8),
+    points_masked=points.astype(np.float32),
+    depth_masked=depth_masked.astype(np.float32),
+)
+
+with output_ply.open("w", encoding="utf-8") as f:
+    f.write("ply\n")
+    f.write("format ascii 1.0\n")
+    f.write(f"element vertex {points.shape[0]}\n")
+    f.write("property float x\n")
+    f.write("property float y\n")
+    f.write("property float z\n")
+    f.write("end_header\n")
+    for px, py, pz in points:
+        f.write(f"{px} {py} {pz}\n")
+
+print(f"Saved real depth stats: {output_json}")
+print(f"Saved real depth npz: {output_npz}")
+print(f"Saved real depth ply: {output_ply}")
+PY
+    IMAGE_PATH="${image_path}" \
+    DEPTH_PATH="${depth_image_path}" \
+    MASK_PATH="${mask_path}" \
+    OUTPUT_NPZ="${real_npz}" \
+    OUTPUT_JSON="${real_json}" \
+    OUTPUT_PLY="${real_ply}" \
+    MIN_PIXELS="${min_pixels}" \
+    DEPTH_SCALE="${depth_scale}" \
+    REAL_BORDER_MARGIN="${real_border_margin}" \
+    REAL_DEPTH_MAD="${real_depth_mad}" \
+    REAL_RADIUS_MAD="${real_radius_mad}" \
+    REAL_MIN_POINTS="${real_min_points}" \
+    conda run -n "${moge_env}" python "${real_tmp_script}"
+    rm -f "${real_tmp_script}"
+
+  fi
+
+  if [[ -n "${depth_image_path}" ]]; then
+    if [[ ! -f "${real_npz}" ]]; then
+      echo "Real depth outputs missing: ${real_npz}. Falling back to MoGe for scaling."
+      real_npz=""
+    fi
+  fi
 
   # 3) SAM3D 실행(PLY 생성)
   compile_flag=""
@@ -251,9 +512,23 @@ for mask_path in "${masks[@]}"; do
     ${compile_flag}
 
   # 4) 스케일 추정(TEASER++ 기본 설정)
+  # depth_image가 있으면 real_depth 기반 NPZ를 사용
+  scale_npz="${moge_npz}"
+  if [[ -n "${depth_image_path}" && -n "${real_npz}" ]]; then
+    scale_npz="${real_npz}"
+  fi
+  if [[ ! -f "${scale_npz}" ]]; then
+    echo "Scale NPZ missing: ${scale_npz}. Falling back to MoGe NPZ."
+    scale_npz="${moge_npz}"
+  fi
+  if [[ ! -f "${scale_npz}" ]]; then
+    echo "Missing MoGe npz: ${scale_npz}"
+    exit 1
+  fi
+
   conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \
     --sam3d-ply "${output_path}" \
-    --moge-npz "${moge_npz}" \
+    --moge-npz "${scale_npz}" \
     --algo teaserpp \
     --output-dir "${scale_out_dir}" \
     --output-scale "${scale_txt}" \
