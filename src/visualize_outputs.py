@@ -128,6 +128,8 @@ def load_moge_depth(npz_path: Path) -> Optional[np.ndarray]:
     if npz_path is None or not npz_path.exists():
         return None
     data = np.load(npz_path)
+    if "depth_full" in data:
+        return data["depth_full"].astype(np.float32)
     valid_mask = data.get("valid_mask")
     depth_masked = data.get("depth_masked")
     if valid_mask is None or depth_masked is None:

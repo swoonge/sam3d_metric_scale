@@ -47,10 +47,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--output-dir", type=Path, default=default_output_dir)
     parser.add_argument("--output-json", type=Path, default=None)
+    parser.add_argument("--output-suffix", type=str, default="")
     parser.add_argument("--no-save-npz", action="store_true")
     parser.add_argument("--no-save-ply", action="store_true")
     parser.add_argument("--scale-method", choices=["bbox_diag", "bbox_max"], default="bbox_diag")
     parser.add_argument("--min-pixels", type=int, default=100)
+    parser.add_argument("--cam-k", type=Path, default=None)
     parser.add_argument(
         "--border-margin",
         type=int,
@@ -98,6 +100,27 @@ def load_mask(path: Path) -> np.ndarray:
     if mask.ndim == 3:
         mask = mask[:, :, -1]
     return mask > 0
+
+
+def parse_cam_k(cam_k_path: Path) -> tuple[float, float, float, float]:
+    """cam_K.txt(3x3 or fx fy cx cy) 로드."""
+    k_mat = np.loadtxt(str(cam_k_path)).astype(np.float32)
+    if k_mat.size == 4:
+        fx, fy, cx, cy = [float(v) for v in k_mat.ravel()]
+        return fx, fy, cx, cy
+    k_mat = k_mat.reshape(3, 3)
+    return float(k_mat[0, 0]), float(k_mat[1, 1]), float(k_mat[0, 2]), float(k_mat[1, 2])
+
+
+def backproject_depth(
+    depth: np.ndarray, valid_mask: np.ndarray, fx: float, fy: float, cx: float, cy: float
+) -> np.ndarray:
+    """Depth + intrinsics 로 카메라 좌표계 포인트 생성."""
+    ys, xs = np.where(valid_mask)
+    z = depth[valid_mask].astype(np.float32)
+    x = (xs - cx) * z / fx
+    y = -(ys - cy) * z / fy
+    return np.stack([x, y, z], axis=1).astype(np.float32)
 
 
 def compute_scale(points: np.ndarray, method: str) -> dict:
@@ -309,6 +332,13 @@ def main() -> int:
     if not mask_path.exists():
         print(f"Missing mask: {mask_path}")
         return 1
+    if args.cam_k is not None:
+        cam_k_path = resolve_path(args.cam_k, Path.cwd())
+        if not cam_k_path.exists():
+            print(f"Missing cam_K: {cam_k_path}")
+            return 1
+    else:
+        cam_k_path = None
 
     if args.device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -334,6 +364,9 @@ def main() -> int:
     points = output["points"].detach().cpu().numpy()
     depth = output["depth"].detach().cpu().numpy()
     valid = output["mask"].detach().cpu().numpy() > 0
+    intrinsics = output.get("intrinsics")
+    if intrinsics is not None:
+        intrinsics = intrinsics.detach().cpu().numpy()
 
     user_mask = load_mask(mask_path)
     if user_mask.shape != depth.shape:
@@ -344,10 +377,43 @@ def main() -> int:
             interpolation=cv2.INTER_NEAREST,
         ).astype(bool)
 
+    finite = np.isfinite(points).all(axis=2) & np.isfinite(depth) & (depth > 0)
+    valid_full = finite & valid
+    points_source = "moge_points"
+    fx = fy = cx = cy = None
+    if cam_k_path is not None:
+        fx, fy, cx, cy = parse_cam_k(cam_k_path)
+        points_full = backproject_depth(depth, valid_full, fx, fy, cx, cy)
+        points_cam = np.full(points.shape, np.nan, dtype=np.float32)
+        ys_all, xs_all = np.where(finite)
+        pts_all = backproject_depth(depth, finite, fx, fy, cx, cy)
+        points_cam[ys_all, xs_all] = pts_all
+        points = points_cam
+        points_source = "cam_k_provided"
+    elif intrinsics is not None:
+        intrinsics = np.asarray(intrinsics, dtype=np.float32)
+        if intrinsics.ndim == 3:
+            intrinsics = intrinsics[0]
+        if intrinsics.shape == (3, 3):
+            height, width = depth.shape
+            fx = float(intrinsics[0, 0] * width)
+            fy = float(intrinsics[1, 1] * height)
+            cx = float(intrinsics[0, 2] * width)
+            cy = float(intrinsics[1, 2] * height)
+            points_full = backproject_depth(depth, valid_full, fx, fy, cx, cy)
+            points_cam = np.full(points.shape, np.nan, dtype=np.float32)
+            ys_all, xs_all = np.where(finite)
+            pts_all = backproject_depth(depth, finite, fx, fy, cx, cy)
+            points_cam[ys_all, xs_all] = pts_all
+            points = points_cam
+            points_source = "intrinsics_estimated"
+        else:
+            points_full = points[valid_full]
+    else:
+        points_full = points[valid_full]
+
     # user_mask + MoGe valid 마스크 + finite 조건을 모두 만족하는 영역만 사용
-    combined = user_mask & valid
-    finite = np.isfinite(points).all(axis=2) & np.isfinite(depth)
-    combined &= finite
+    combined = user_mask & valid_full
 
     if combined.sum() < args.min_pixels:
         print(f"Not enough valid pixels: {combined.sum()}")
@@ -386,6 +452,7 @@ def main() -> int:
         "image": str(image_path),
         "mask": str(mask_path),
         "model": args.model,
+        "points_source": points_source,
         "points_count_raw": int(masked_points.shape[0]),
         "points_count": int(filtered_points.shape[0]),
         "filter_applied": bool(filter_applied),
@@ -398,10 +465,16 @@ def main() -> int:
         "depth_min": float(filtered_depth.min()),
         "depth_max": float(filtered_depth.max()),
     }
+    if fx is not None and fy is not None and cx is not None and cy is not None:
+        stats["camera_fx"] = float(fx)
+        stats["camera_fy"] = float(fy)
+        stats["camera_cx"] = float(cx)
+        stats["camera_cy"] = float(cy)
     stats.update(compute_scale(filtered_points, args.scale_method))
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"{image_path.stem}_{mask_path.stem}"
+    suffix = f"_{args.output_suffix}" if args.output_suffix else ""
+    stem = f"{image_path.stem}_{mask_path.stem}{suffix}"
     if args.output_json is not None:
         json_path = resolve_path(args.output_json, Path.cwd())
     else:
@@ -420,21 +493,29 @@ def main() -> int:
             valid_mask=filtered_valid.astype(np.uint8),
             points_masked=filtered_points.astype(np.float32),
             depth_masked=filtered_depth.astype(np.float32),
+            valid_full=valid_full.astype(np.uint8),
+            points_full=points_full.astype(np.float32),
+            depth_full=depth.astype(np.float32),
         )
     else:
         npz_path = None
 
     ply_path = None
+    full_ply_path = None
     if not args.no_save_ply:
         # 외부 툴에서 바로 확인할 수 있도록 PLY도 저장
         ply_path = output_dir / f"{stem}.ply"
         save_points_ply(filtered_points, ply_path)
+        full_ply_path = output_dir / f"{stem}_full.ply"
+        save_points_ply(points_full, full_ply_path)
 
     print(f"Saved scale stats: {json_path}")
     if not args.no_save_npz:
         print(f"Saved masked outputs: {npz_path}")
     if ply_path is not None:
         print(f"Saved MoGe point cloud: {ply_path}")
+    if full_ply_path is not None:
+        print(f"Saved MoGe full point cloud: {full_ply_path}")
 
     if args.save_viz or args.show_viz:
         # 옵션일 때만 matplotlib 시각화 생성

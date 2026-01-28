@@ -8,7 +8,7 @@ set -euo pipefail
 # 1) SAM2 UI로 마스크 생성
 # 2) MoGe로 metric depth/포인트 추출
 # 3) SAM3D로 PLY 생성
-# 4) MoGe 포인트 기반으로 SAM3D 스케일 추정
+# 4) MoGe 포인트 기반으로 SAM3D 스케일 추정 (현재 비활성)
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${script_dir}"
@@ -26,7 +26,7 @@ fi
 image_path="${default_image}"
 depth_image_path=""
 # real depth scale (e.g., 0.001 if depth is in millimeters)
-depth_scale="auto"
+depth_scale="0.001"
 
 # 출력 베이스 디렉터리
 output_base="${repo_root}/outputs"
@@ -45,6 +45,7 @@ sam3d_compile=0
 moge_model="Ruicheng/moge-2-vitl-normal"
 scale_method="bbox_diag"
 min_pixels=100
+cam_k_path="/home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_box/cam_K.txt"
 
 # real depth filtering (stricter than MoGe)
 real_border_margin=5
@@ -98,6 +99,7 @@ Options:
   --moge-model NAME         HF model id or local path
   --scale-method NAME       bbox_diag | bbox_max (default: bbox_diag)
   --min-pixels INT          Minimum valid pixels for scale
+  --cam-k PATH              Camera intrinsics (3x3) for real depth backprojection
   -h, --help                Show this help
 USAGE
 }
@@ -187,6 +189,10 @@ while [[ $# -gt 0 ]]; do
       min_pixels="$2"
       shift 2
       ;;
+    --cam-k)
+      cam_k_path="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -211,6 +217,9 @@ sam3d_config="$(resolve_path "${sam3d_config}")"
 if [[ -n "${depth_image_path}" ]]; then
   depth_image_path="$(resolve_path "${depth_image_path}")"
 fi
+if [[ -n "${cam_k_path}" ]]; then
+  cam_k_path="$(resolve_path "${cam_k_path}")"
+fi
 
 image_stem="$(basename "${image_path}")"
 image_stem="${image_stem%.*}"
@@ -219,7 +228,6 @@ mask_dir="${output_root}/sam2_masks"
 sam3d_out_dir="${output_root}/sam3d"
 moge_out_dir="${output_root}/moge_scale"
 real_out_dir="${output_root}/real_scale"
-scale_out_dir="${output_root}/sam3d_scale"
 
 mkdir -p "${output_root}"
 echo "Output root: ${output_root}"
@@ -234,7 +242,7 @@ conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
   --image "${image_path}" \
   --output-dir "${mask_dir}"
 
-mkdir -p "${sam3d_out_dir}" "${moge_out_dir}" "${scale_out_dir}"
+mkdir -p "${sam3d_out_dir}" "${moge_out_dir}"
 if [[ -n "${depth_image_path}" ]]; then
   mkdir -p "${real_out_dir}"
 fi
@@ -262,8 +270,8 @@ for mask_path in "${masks[@]}"; do
   real_npz=""
   real_json=""
   real_ply=""
-  scale_txt="${scale_out_dir}/${mask_stem}_scale.txt"
-  scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
+  # scale_txt="${scale_out_dir}/${mask_stem}_scale.txt"
+  # scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
 
   # 2) MoGe 실행(마스크 영역 metric depth/points)
   conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
@@ -273,6 +281,18 @@ for mask_path in "${masks[@]}"; do
     --output-dir "${moge_out_dir}" \
     --scale-method "${scale_method}" \
     --min-pixels "${min_pixels}"
+
+  if [[ -n "${cam_k_path}" ]]; then
+    conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
+      --image "${image_path}" \
+      --mask "${mask_path}" \
+      --model "${moge_model}" \
+      --output-dir "${moge_out_dir}" \
+      --scale-method "${scale_method}" \
+      --min-pixels "${min_pixels}" \
+      --cam-k "${cam_k_path}" \
+      --output-suffix "camk"
+  fi
 
   # 2-1) Real depth 기반 outputs (옵션)
   if [[ -n "${depth_image_path}" ]]; then
@@ -328,6 +348,8 @@ mask_path = Path(os.environ["MASK_PATH"])
 output_npz = Path(os.environ["OUTPUT_NPZ"])
 output_json = Path(os.environ["OUTPUT_JSON"])
 output_ply = Path(os.environ["OUTPUT_PLY"])
+output_full_ply = Path(os.environ["OUTPUT_FULL_PLY"])
+cam_k_path = Path(os.environ.get("CAM_K_PATH", ""))
 min_pixels = int(os.environ.get("MIN_PIXELS", "100"))
 
 border_margin = int(os.environ.get("REAL_BORDER_MARGIN", "5"))
@@ -339,6 +361,8 @@ if not depth_path.exists():
     raise SystemExit(f"Missing depth image: {depth_path}")
 if not mask_path.exists():
     raise SystemExit(f"Missing mask: {mask_path}")
+if cam_k_path and not cam_k_path.exists():
+    raise SystemExit(f"Missing camera intrinsics: {cam_k_path}")
 
 depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
 if depth is None:
@@ -359,6 +383,20 @@ if depth_scale_raw == "auto":
 else:
     depth_scale_value = float(depth_scale_raw)
 depth = depth * depth_scale_value
+
+if cam_k_path:
+    k_mat = np.loadtxt(str(cam_k_path)).astype(np.float32)
+    if k_mat.size == 4:
+        fx, fy, cx, cy = [float(v) for v in k_mat.ravel()]
+    else:
+        k_mat = k_mat.reshape(3, 3)
+        fx = float(k_mat[0, 0])
+        fy = float(k_mat[1, 1])
+        cx = float(k_mat[0, 2])
+        cy = float(k_mat[1, 2])
+else:
+    fx = fy = None
+    cx = cy = None
 
 mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
 if mask is None:
@@ -382,13 +420,22 @@ ys, xs = np.where(valid)
 depth_masked = depth[valid]
 
 height, width = depth.shape
-cx = (width - 1) / 2.0
-cy = (height - 1) / 2.0
-focal = float(max(height, width))
+if fx is None or fy is None:
+    fx = fy = float(max(height, width))
+if cx is None or cy is None:
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
 z = depth_masked
-x = (xs - cx) * z / focal
-y = -(ys - cy) * z / focal
+x = (xs - cx) * z / fx
+y = -(ys - cy) * z / fy
 points = np.stack([x, y, z], axis=1).astype(np.float32)
+
+valid_full = np.isfinite(depth) & (depth > 0)
+ys_full, xs_full = np.where(valid_full)
+z_full = depth[valid_full]
+x_full = (xs_full - cx) * z_full / fx
+y_full = -(ys_full - cy) * z_full / fy
+points_full = np.stack([x_full, y_full, z_full], axis=1).astype(np.float32)
 
 keep = build_filter_keep_mask(points, ys, xs, depth.shape, border_margin, depth_mad, radius_mad)
 filter_applied = int(keep.sum()) >= min_points
@@ -429,6 +476,10 @@ stats = {
     "mask": str(mask_path),
     "model": "real_depth",
     "depth_scale": float(depth_scale_value),
+    "camera_fx": float(fx),
+    "camera_fy": float(fy),
+    "camera_cx": float(cx),
+    "camera_cy": float(cy),
     "points_count_raw": int(points.shape[0]),
     "points_count": int(points.shape[0]),
     "filter_applied": bool(filter_applied),
@@ -456,6 +507,9 @@ np.savez_compressed(
     valid_mask=filtered_valid.astype(np.uint8),
     points_masked=points.astype(np.float32),
     depth_masked=depth_masked.astype(np.float32),
+    valid_full=valid_full.astype(np.uint8),
+    points_full=points_full.astype(np.float32),
+    depth_full=depth.astype(np.float32),
 )
 
 with output_ply.open("w", encoding="utf-8") as f:
@@ -469,9 +523,21 @@ with output_ply.open("w", encoding="utf-8") as f:
     for px, py, pz in points:
         f.write(f"{px} {py} {pz}\n")
 
+with output_full_ply.open("w", encoding="utf-8") as f:
+    f.write("ply\n")
+    f.write("format ascii 1.0\n")
+    f.write(f"element vertex {points_full.shape[0]}\n")
+    f.write("property float x\n")
+    f.write("property float y\n")
+    f.write("property float z\n")
+    f.write("end_header\n")
+    for px, py, pz in points_full:
+        f.write(f"{px} {py} {pz}\n")
+
 print(f"Saved real depth stats: {output_json}")
 print(f"Saved real depth npz: {output_npz}")
 print(f"Saved real depth ply: {output_ply}")
+print(f"Saved real depth full ply: {output_full_ply}")
 PY
     IMAGE_PATH="${image_path}" \
     DEPTH_PATH="${depth_image_path}" \
@@ -479,6 +545,8 @@ PY
     OUTPUT_NPZ="${real_npz}" \
     OUTPUT_JSON="${real_json}" \
     OUTPUT_PLY="${real_ply}" \
+    OUTPUT_FULL_PLY="${real_out_dir}/${image_stem}_${mask_stem}_full.ply" \
+    CAM_K_PATH="${cam_k_path}" \
     MIN_PIXELS="${min_pixels}" \
     DEPTH_SCALE="${depth_scale}" \
     REAL_BORDER_MARGIN="${real_border_margin}" \
@@ -526,29 +594,29 @@ PY
     exit 1
   fi
 
-  conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \
-    --sam3d-ply "${output_path}" \
-    --moge-npz "${scale_npz}" \
-    --algo teaserpp \
-    --output-dir "${scale_out_dir}" \
-    --output-scale "${scale_txt}" \
-    --output-scaled-ply "${scaled_ply}" \
-    $( [[ ${teaser_estimate_scaling} -eq 1 ]] && echo "--teaser-estimate-scaling" ) \
-    --teaser-noise-bound "${teaser_noise_bound}" \
-    --teaser-nn-max-points "${teaser_nn_max_points}" \
-    --teaser-max-correspondences "${teaser_max_correspondences}" \
-    --teaser-gnc-factor "${teaser_gnc_factor}" \
-    --teaser-rot-max-iters "${teaser_rot_max_iters}" \
-    --teaser-cbar2 "${teaser_cbar2}" \
-    --teaser-iterations "${teaser_iterations}" \
-    --teaser-correspondence "${teaser_correspondence}" \
-    --teaser-fpfh-voxel "${teaser_fpfh_voxel}" \
-    --teaser-fpfh-normal-radius "${teaser_fpfh_normal_radius}" \
-    --teaser-fpfh-feature-radius "${teaser_fpfh_feature_radius}" \
-    $( [[ ${teaser_icp_refine} -eq 1 ]] && echo "--teaser-icp-refine" ) \
-    --teaser-icp-max-iters "${teaser_icp_max_iters}" \
-    --teaser-icp-distance "${teaser_icp_distance}" \
-    $( [[ ${teaser_show_viz} -eq 1 ]] && echo "--show-viz" ) \
-    --viz-method "${teaser_viz_method}"
+  # conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \
+  #   --sam3d-ply "${output_path}" \
+  #   --moge-npz "${scale_npz}" \
+  #   --algo teaserpp \
+  #   --output-dir "${scale_out_dir}" \
+  #   --output-scale "${scale_txt}" \
+  #   --output-scaled-ply "${scaled_ply}" \
+  #   $( [[ ${teaser_estimate_scaling} -eq 1 ]] && echo "--teaser-estimate-scaling" ) \
+  #   --teaser-noise-bound "${teaser_noise_bound}" \
+  #   --teaser-nn-max-points "${teaser_nn_max_points}" \
+  #   --teaser-max-correspondences "${teaser_max_correspondences}" \
+  #   --teaser-gnc-factor "${teaser_gnc_factor}" \
+  #   --teaser-rot-max-iters "${teaser_rot_max_iters}" \
+  #   --teaser-cbar2 "${teaser_cbar2}" \
+  #   --teaser-iterations "${teaser_iterations}" \
+  #   --teaser-correspondence "${teaser_correspondence}" \
+  #   --teaser-fpfh-voxel "${teaser_fpfh_voxel}" \
+  #   --teaser-fpfh-normal-radius "${teaser_fpfh_normal_radius}" \
+  #   --teaser-fpfh-feature-radius "${teaser_fpfh_feature_radius}" \
+  #   $( [[ ${teaser_icp_refine} -eq 1 ]] && echo "--teaser-icp-refine" ) \
+  #   --teaser-icp-max-iters "${teaser_icp_max_iters}" \
+  #   --teaser-icp-distance "${teaser_icp_distance}" \
+  #   $( [[ ${teaser_show_viz} -eq 1 ]] && echo "--show-viz" ) \
+  #   --viz-method "${teaser_viz_method}"
 
 done
