@@ -427,14 +427,14 @@ if cx is None or cy is None:
     cy = (height - 1) / 2.0
 z = depth_masked
 x = (xs - cx) * z / fx
-y = -(ys - cy) * z / fy
+y = (ys - cy) * z / fy
 points = np.stack([x, y, z], axis=1).astype(np.float32)
 
 valid_full = np.isfinite(depth) & (depth > 0)
 ys_full, xs_full = np.where(valid_full)
 z_full = depth[valid_full]
 x_full = (xs_full - cx) * z_full / fx
-y_full = -(ys_full - cy) * z_full / fy
+y_full = (ys_full - cy) * z_full / fy
 points_full = np.stack([x_full, y_full, z_full], axis=1).astype(np.float32)
 
 keep = build_filter_keep_mask(points, ys, xs, depth.shape, border_margin, depth_mad, radius_mad)
@@ -577,6 +577,7 @@ PY
     --sam3d-config "${sam3d_config}" \
     --output "${output_path}" \
     --seed "${sam3d_seed}" \
+    --pose-rot-transpose \
     ${compile_flag}
 
   # 4) 스케일 추정(TEASER++ 기본 설정)

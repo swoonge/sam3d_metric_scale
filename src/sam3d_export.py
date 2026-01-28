@@ -72,6 +72,11 @@ def parse_args() -> argparse.Namespace:
         default="auto",
     )
     parser.add_argument("--viz-max-points", type=int, default=20000)
+    parser.add_argument(
+        "--pose-rot-transpose",
+        action="store_true",
+        help="Use R.T instead of R when applying pose (if rotation convention is transposed).",
+    )
     return parser.parse_args()
 
 
@@ -217,6 +222,43 @@ def to_numpy(value) -> np.ndarray | None:
     if isinstance(value, np.ndarray):
         return value
     return np.asarray(value)
+
+
+def parse_pose(output: dict) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, dict]:
+    """SAM3D 출력에서 rotation/translation/scale을 정규화해 반환."""
+    pose_quat = to_numpy(output.get("rotation"))
+    pose_trans = to_numpy(output.get("translation"))
+    pose_scale = to_numpy(output.get("scale"))
+
+    rot_mat = None
+    rot_meta = {"type": None, "value": None}
+    if pose_quat is not None:
+        pose_quat = np.asarray(pose_quat, dtype=np.float32).reshape(-1)
+        if pose_quat.size >= 4 and pose_quat.size < 6:
+            rot_mat = quaternion_to_matrix(pose_quat[:4])
+            rot_meta = {"type": "quaternion_wxyz", "value": pose_quat[:4].tolist()}
+        elif pose_quat.size == 6:
+            rot_mat = rotation_6d_to_matrix(pose_quat[:6])
+            rot_meta = {"type": "rotation_6d", "value": pose_quat[:6].tolist()}
+        elif pose_quat.size == 9:
+            rot_mat = pose_quat.reshape(3, 3)
+            rot_meta = {"type": "rotation_matrix", "value": rot_mat.tolist()}
+
+    trans_vec = None
+    if pose_trans is not None:
+        pose_trans = np.asarray(pose_trans, dtype=np.float32).reshape(-1)
+        if pose_trans.size >= 3:
+            trans_vec = pose_trans[:3]
+
+    scale_vec = None
+    if pose_scale is not None:
+        pose_scale = np.asarray(pose_scale, dtype=np.float32).reshape(-1)
+        if pose_scale.size == 1:
+            scale_vec = np.repeat(pose_scale[0], 3)
+        elif pose_scale.size >= 3:
+            scale_vec = pose_scale[:3]
+
+    return rot_mat, trans_vec, scale_vec, rot_meta
 
 
 def save_pose_transformed_gaussian(
@@ -440,22 +482,48 @@ def main() -> int:
         print("SAM3D output missing 'gs' key")
         return 1
 
+    # NOTE: pointmap은 SAM3D 내부에서 Pytorch3D camera frame으로 변환되어 사용된다.
+    #       비교 기준이 되는 real/moge pointcloud는 일반적인 camera frame(R3)로 생성되므로,
+    #       여기서는 pointmap을 P3D -> camera frame으로 역변환하여 저장한다.
+    cam_from_p3d_rot = None
     if args.save_pointmap:
         try:
             rgba = inference.merge_mask_to_rgba(image, mask)
             pointmap_dict = inference._pipeline.compute_pointmap(rgba)
-            pointmap = pointmap_dict["pointmap"].detach().cpu().permute(1, 2, 0).numpy()
+            pointmap_p3d = pointmap_dict["pointmap"].detach()
             colors = pointmap_dict["pts_color"].detach().cpu().permute(1, 2, 0).numpy()
             intrinsics = pointmap_dict.get("intrinsics", None)
             if intrinsics is not None:
                 intrinsics = intrinsics.detach().cpu().numpy()
 
+            try:
+                from sam3d_objects.pipeline.inference_pipeline_pointmap import (
+                    camera_to_pytorch3d_camera,
+                )
+                from pytorch3d.transforms import Transform3d
+
+                h, w = pointmap_p3d.shape[1], pointmap_p3d.shape[2]
+                points_flat = pointmap_p3d.permute(1, 2, 0).reshape(-1, 3)
+                cam_to_p3d = (
+                    Transform3d()
+                    .rotate(camera_to_pytorch3d_camera(device=points_flat.device).rotation)
+                    .to(points_flat.device)
+                )
+                # P3D -> camera 변환
+                points_cam = cam_to_p3d.inverse().transform_points(points_flat)
+                pointmap = points_cam.reshape(h, w, 3).cpu().numpy()
+                cam_from_p3d_rot = cam_to_p3d.inverse().get_matrix()[0, :3, :3].cpu().numpy()
+            except Exception:
+                pointmap = pointmap_p3d.cpu().permute(1, 2, 0).numpy()
+
             pointmap_npz = output_path.with_name(f"{output_path.stem}_pointmap_full.npz")
             np.savez_compressed(
                 pointmap_npz,
                 pointmap=pointmap,
+                pointmap_p3d=pointmap_p3d.cpu().permute(1, 2, 0).numpy(),
                 colors=colors,
                 intrinsics=intrinsics,
+                pointmap_frame="camera",
             )
             flat_points, flat_colors = flatten_pointmap(pointmap, colors)
             pointmap_ply = output_path.with_name(f"{output_path.stem}_pointmap_full.ply")
@@ -465,61 +533,26 @@ def main() -> int:
         except Exception as exc:
             print(f"Failed to save pointmap output: {exc}")
 
-    pose_quat = to_numpy(output.get("rotation"))
-    pose_trans = to_numpy(output.get("translation"))
-    pose_scale = to_numpy(output.get("scale"))
-    pose_rot_mat = None
-    pose_scale_vec = None
-    pose_trans_vec = None
-
-    if pose_quat is not None:
-        pose_quat = np.asarray(pose_quat, dtype=np.float32).reshape(-1)
-        if pose_quat.size >= 4:
-            pose_rot_mat = quaternion_to_matrix(pose_quat[:4])
-        elif pose_quat.size == 6:
-            pose_rot_mat = rotation_6d_to_matrix(pose_quat[:6])
-        elif pose_quat.size == 9:
-            pose_rot_mat = pose_quat.reshape(3, 3)
-
-    if pose_scale is not None:
-        pose_scale = np.asarray(pose_scale, dtype=np.float32).reshape(-1)
-        if pose_scale.size == 1:
-            pose_scale_vec = np.repeat(pose_scale[0], 3)
-        elif pose_scale.size >= 3:
-            pose_scale_vec = pose_scale[:3]
-
-    if pose_trans is not None:
-        pose_trans = np.asarray(pose_trans, dtype=np.float32).reshape(-1)
-        if pose_trans.size >= 3:
-            pose_trans_vec = pose_trans[:3]
+    pose_rot_mat, pose_trans_vec, pose_scale_vec, pose_rot_meta = parse_pose(output)
+    if pose_rot_mat is not None and args.pose_rot_transpose:
+        pose_rot_mat = pose_rot_mat.T.copy()
 
     # Gaussian Splat 결과를 PLY로 저장
     output["gs"].save_ply(str(output_path))
     print(f"SAM3D saved: {output_path}")
 
     if pose_rot_mat is not None and pose_scale_vec is not None and pose_trans_vec is not None:
+        # pose가 P3D frame 기준으로 예측되었다면 camera frame으로 역변환한다.
+        # (pointmap 저장 시 적용한 P3D->camera 변환과 동일한 회전)
+        if cam_from_p3d_rot is not None:
+            pose_rot_mat = cam_from_p3d_rot @ pose_rot_mat
+            pose_trans_vec = (cam_from_p3d_rot @ pose_trans_vec.reshape(3, 1)).reshape(3)
         pose_json = output_path.with_name(f"{output_path.stem}_pose.json")
-        rotation_payload = {"type": None, "value": None}
-        if pose_quat is not None:
-            if pose_quat.size >= 4 and pose_quat.size < 6:
-                rotation_payload = {
-                    "type": "quaternion_wxyz",
-                    "value": pose_quat[:4].tolist(),
-                }
-            elif pose_quat.size == 6:
-                rotation_payload = {
-                    "type": "rotation_6d",
-                    "value": pose_quat[:6].tolist(),
-                }
-            elif pose_quat.size == 9:
-                rotation_payload = {
-                    "type": "rotation_matrix",
-                    "value": pose_quat[:9].reshape(3, 3).tolist(),
-                }
         pose_payload = {
-            "rotation": rotation_payload,
+            "rotation": pose_rot_meta,
             "translation": pose_trans_vec.tolist(),
             "scale": pose_scale_vec.tolist(),
+            "rotation_matrix": pose_rot_mat.tolist(),
         }
         with pose_json.open("w", encoding="utf-8") as f:
             import json
@@ -534,14 +567,18 @@ def main() -> int:
         print(f"SAM3D pose PLY saved: {pose_ply}")
 
     if args.save_mesh:
-        mesh = output.get("glb") or output.get("mesh")
+        mesh_raw = output.get("mesh")
+        if isinstance(mesh_raw, (list, tuple)) and mesh_raw:
+            mesh_raw = mesh_raw[0]
+        mesh_glb = output.get("glb")
+        mesh = mesh_glb or mesh_raw
         if mesh is None:
             print("SAM3D output missing mesh; skip mesh export.")
         else:
             try:
-                if args.mesh_format in ("glb", "both", "all"):
+                if args.mesh_format in ("glb", "both", "all") and mesh_glb is not None:
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.glb")
-                    mesh.export(mesh_path)
+                    mesh_glb.export(mesh_path)
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if args.mesh_format in ("ply", "both", "all"):
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.ply")
@@ -552,17 +589,18 @@ def main() -> int:
                     mesh.export(mesh_path)
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if pose_rot_mat is not None and pose_scale_vec is not None and pose_trans_vec is not None:
+                    pose_mesh_source = mesh_raw if mesh_raw is not None else mesh
                     if args.mesh_format in ("glb", "both", "all"):
                         mesh_path = output_path.with_name(f"{output_path.stem}_pose_mesh.glb")
-                        save_pose_transformed_mesh(mesh, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
+                        save_pose_transformed_mesh(pose_mesh_source, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
                         print(f"SAM3D pose mesh saved: {mesh_path}")
                     if args.mesh_format in ("ply", "both", "all"):
                         mesh_path = output_path.with_name(f"{output_path.stem}_pose_mesh.ply")
-                        save_pose_transformed_mesh(mesh, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
+                        save_pose_transformed_mesh(pose_mesh_source, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
                         print(f"SAM3D pose mesh saved: {mesh_path}")
                     if args.mesh_format in ("obj", "all"):
                         mesh_path = output_path.with_name(f"{output_path.stem}_pose_mesh.obj")
-                        save_pose_transformed_mesh(mesh, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
+                        save_pose_transformed_mesh(pose_mesh_source, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
                         print(f"SAM3D pose mesh saved: {mesh_path}")
             except Exception as exc:
                 print(f"Failed to save mesh: {exc}")
