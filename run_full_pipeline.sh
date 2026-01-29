@@ -658,13 +658,7 @@ PY
   if [[ -n "${target_npz}" ]]; then
     sam3d_pose_ply="${sam3d_out_dir}/${mask_stem}_pose.ply"
 
-    if ! conda run -n "${scale_env}" python - <<'PY'
-try:
-    import trimesh  # noqa: F401
-except Exception:
-    raise SystemExit(1)
-PY
-    then
+    if ! conda run -n "${scale_env}" python -c "import trimesh" >/dev/null 2>&1; then
       echo "Installing trimesh into ${scale_env} for mesh scaling outputs..."
       conda run -n "${scale_env}" python -m pip install trimesh
     fi

@@ -112,10 +112,15 @@ def load_mesh(path: Path):
     try:
         import trimesh
     except Exception:
+        print("trimesh not available; scaled mesh outputs will be skipped.")
         return None
     if not path.exists():
         return None
-    mesh = trimesh.load(path, force="mesh")
+    try:
+        mesh = trimesh.load(path, force="mesh")
+    except Exception as exc:
+        print(f"Failed to load mesh {path.name}: {exc}")
+        return None
     if isinstance(mesh, trimesh.Scene):
         if not mesh.geometry:
             return None
@@ -507,6 +512,8 @@ def main() -> int:
         if src_mesh.exists():
             scaled_mesh = output_dir / f"{stem}_scaled_mesh.{ext}"
             save_scaled_mesh(src_mesh, scaled_mesh, final_scale_vec)
+        else:
+            print(f"Missing mesh source: {src_mesh}")
 
     if pose_r is None or pose_t is None or pose_s is None:
         print("Pose metadata missing; skipping pose-applied outputs.")
@@ -542,6 +549,8 @@ def main() -> int:
             if src_mesh.exists():
                 pose_mesh = output_dir / f"{stem}_pose_mesh.{ext}"
                 save_transformed_mesh(src_mesh, pose_mesh, scaled_pose_vec, r_total, t_total)
+            else:
+                print(f"Missing mesh source: {src_mesh}")
 
         if args.save_posed:
             posed_json = output_dir / f"{stem}_posed.json"
@@ -561,6 +570,8 @@ def main() -> int:
                 if src_mesh.exists():
                     posed_mesh = output_dir / f"{stem}_posed_mesh.{ext}"
                     save_transformed_mesh(src_mesh, posed_mesh, pose_only_scale_vec, pose_r, pose_t)
+                else:
+                    print(f"Missing mesh source: {src_mesh}")
 
     if viz_scale is None:
         viz_scale = scale
@@ -600,7 +611,7 @@ def main() -> int:
                 max_points=args.viz_max_points,
                 max_spheres=args.viz_max_pairs,
                 seed=args.seed,
-                title=f"{args.algo} alignment (scale={scale_str})",
+                title=f"{args.algo} alignment",
             )
         else:
             visualize_alignment(
@@ -614,7 +625,7 @@ def main() -> int:
                 max_points=args.viz_max_points,
                 max_pairs=args.viz_max_pairs,
                 seed=args.seed,
-                title=f"{args.algo} alignment (scale={scale_str})",
+                title=f"{args.algo} alignment",
                 save_path=viz_path,
                 show=args.show_viz,
                 dpi=args.viz_dpi,
@@ -632,7 +643,7 @@ def main() -> int:
                 max_points=args.viz_max_points,
                 max_pairs=args.viz_max_pairs,
                 seed=args.seed,
-                title=f"{args.algo} alignment (scale={scale_str})",
+                title=f"{args.algo} alignment",
                 save_path=viz_path,
                 show=False,
                 dpi=args.viz_dpi,
