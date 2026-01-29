@@ -183,6 +183,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After scale-only, run TEASER++ once (without scale) for R/t refinement.",
     )
+    parser.add_argument(
+        "--refine-registration",
+        action="store_true",
+        help="Alias for --fine-registration.",
+    )
+    parser.add_argument(
+        "--save-posed",
+        action="store_true",
+        help="Also save pose-only outputs (_posed.*) without global scale.",
+    )
 
     # ICP 옵션
     parser.add_argument("--icp-max-iters", type=int, default=30)
@@ -352,14 +362,25 @@ def main() -> int:
         print("MoGe points not found in npz.")
         return 1
 
-    sam_points = sam_points[np.isfinite(sam_points).all(axis=1)]
+    raw_points = raw_points[np.isfinite(raw_points).all(axis=1)]
     moge_points = moge_points[np.isfinite(moge_points).all(axis=1)]
-    if sam_points.size == 0 or moge_points.size == 0:
+    if raw_points.size == 0 or moge_points.size == 0:
         print("Empty point set.")
         return 1
 
+    # pose metadata (from sam3d outputs)
+    pose_payload = load_pose_payload(sam3d_dir / f"{base_stem}_pose.json")
+    pose_r, pose_t, pose_s = parse_pose_payload(pose_payload)
+    if pose_r is None or pose_t is None or pose_s is None:
+        pose_r = None
+        pose_t = None
+        pose_s = None
+        pose_points = raw_points
+    else:
+        pose_points = apply_pose(raw_points, pose_s, pose_r, pose_t)
+
     # 알고리즘용 샘플링
-    sam_sample = sample_points(sam_points, args.max_points, args.seed)
+    sam_sample = sample_points(pose_points, args.max_points, args.seed)
     moge_sample = sample_points(moge_points, args.max_points, args.seed + 1)
 
     output_dir = args.output_dir
@@ -369,8 +390,10 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stem = base_stem
-    viz_src = sam_points
+    viz_src = pose_points
     viz_scale = None
+    refine_registration = args.fine_registration or args.refine_registration
+
     if args.mode == "scale_only":
         denom = float(np.sum(sam_sample * sam_sample))
         if denom <= 0:
@@ -396,46 +419,45 @@ def main() -> int:
                 "icp_refine": False,
             },
         }
-        if args.fine_registration:
-            sam_sample_scaled = sam_sample * scale_value
-            fine = estimate_scale_teaserpp(
-                sam_sample_scaled,
-                moge_sample,
-                nn_max_points=args.teaser_nn_max_points,
-                max_correspondences=args.teaser_max_correspondences,
-                noise_bound=args.teaser_noise_bound,
-                cbar2=args.teaser_cbar2,
-                gnc_factor=args.teaser_gnc_factor,
-                rot_max_iters=args.teaser_rot_max_iters,
-                estimate_scaling=False,
-                iterations=1,
-                correspondence=args.teaser_correspondence,
-                fpfh_voxel=args.teaser_fpfh_voxel,
-                fpfh_normal_radius=args.teaser_fpfh_normal_radius,
-                fpfh_feature_radius=args.teaser_fpfh_feature_radius,
-                icp_refine=args.teaser_icp_refine,
-                icp_max_iters=args.teaser_icp_max_iters,
-                icp_distance=args.teaser_icp_distance,
-                seed=args.seed,
-            )
-            r = fine.get("r")
-            t = fine.get("t")
-            result.update(
-                {
-                    "r": r,
-                    "t": t,
-                    "matched_src": fine.get("matched_src"),
-                    "matched_dst": fine.get("matched_dst"),
-                    "match_mask": fine.get("match_mask"),
-                    "inlier_indices": fine.get("inlier_indices"),
-                    "metrics": {
-                        **result["metrics"],
-                        "corr_mode": "scale_only+teaser",
-                    },
-                }
-            )
-            viz_src = sam_points * scale_value
-            viz_scale = 1.0
+        if refine_registration:
+            try:
+                import open3d as o3d
+            except Exception:
+                print("open3d is required for --refine-registration (ICP). Skipping refine.")
+            else:
+                sam_sample_scaled = sam_sample * scale_value
+                src_pcd = o3d.geometry.PointCloud()
+                src_pcd.points = o3d.utility.Vector3dVector(sam_sample_scaled)
+                dst_pcd = o3d.geometry.PointCloud()
+                dst_pcd.points = o3d.utility.Vector3dVector(moge_sample)
+
+                all_points = np.vstack([sam_sample_scaled, moge_sample])
+                diag = float(np.linalg.norm(all_points.max(axis=0) - all_points.min(axis=0)))
+                thresh = max(1e-6, diag * 0.05)
+
+                init = np.eye(4, dtype=np.float64)
+                reg = o3d.pipelines.registration.registration_icp(
+                    src_pcd,
+                    dst_pcd,
+                    thresh,
+                    init,
+                    o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+                    o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=args.icp_max_iters),
+                )
+                r = reg.transformation[:3, :3].astype(np.float32)
+                t = reg.transformation[:3, 3].astype(np.float32)
+                result.update(
+                    {
+                        "r": r,
+                        "t": t,
+                        "metrics": {
+                            **result["metrics"],
+                            "corr_mode": "scale_only+icp",
+                        },
+                    }
+                )
+                viz_src = pose_points * scale_value
+                viz_scale = 1.0
         scale = scale_value
     else:
         result = pick_algorithm(args, sam_sample, moge_sample)
@@ -463,49 +485,59 @@ def main() -> int:
             scaled_mesh = output_dir / f"{stem}_scaled_mesh.{ext}"
             save_scaled_mesh(src_mesh, scaled_mesh, scale)
 
-    pose_payload = None
-    pose_path_candidates = [
-        output_dir / f"{stem}_pose.json",
-        sam3d_dir / f"{stem}_pose.json",
-    ]
-    for candidate in pose_path_candidates:
-        pose_payload = load_pose_payload(candidate)
-        if pose_payload is not None:
-            break
-    pose_r, pose_t, pose_s = parse_pose_payload(pose_payload)
-    if pose_r is not None and pose_t is not None and pose_s is not None:
-        scale_vec = pose_s * scale
-        if args.fine_registration and r is not None and t is not None:
+    if pose_r is None or pose_t is None or pose_s is None:
+        print("Pose metadata missing; skipping pose-applied outputs.")
+    else:
+        pose_only_scale_vec = pose_s
+        scaled_pose_vec = pose_s * scale
+
+        r_total = pose_r
+        t_total = pose_t
+        if refine_registration and r is not None and t is not None:
             r_total = r @ pose_r
             t_total = r @ pose_t + t
-        else:
-            r_total = pose_r
-            t_total = pose_t
 
         pose_out = {
             "rotation_matrix": r_total.tolist(),
             "translation": t_total.tolist(),
-            "scale": scale_vec.tolist(),
+            "scale": scaled_pose_vec.tolist(),
             "base_rotation_matrix": pose_r.tolist(),
             "base_translation": pose_t.tolist(),
             "base_scale": pose_s.tolist(),
-            "fine_registration": bool(args.fine_registration),
+            "refine_registration": bool(refine_registration),
         }
         pose_json = output_dir / f"{stem}_pose.json"
         with pose_json.open("w", encoding="utf-8") as f:
             json.dump(pose_out, f, indent=2)
 
-        pose_points = apply_pose(raw_points, scale_vec, r_total, t_total)
+        pose_points = apply_pose(raw_points, scaled_pose_vec, r_total, t_total)
         pose_ply = output_dir / f"{stem}_pose.ply"
-        write_pose_ply(raw_ply, pose_points, pose_ply, scale_vec)
+        write_pose_ply(raw_ply, pose_points, pose_ply, scaled_pose_vec)
 
         for ext in ("glb", "ply", "obj"):
             src_mesh = sam3d_dir / f"{stem}_mesh.{ext}"
             if src_mesh.exists():
                 pose_mesh = output_dir / f"{stem}_pose_mesh.{ext}"
-                save_transformed_mesh(src_mesh, pose_mesh, scale_vec, r_total, t_total)
-    else:
-        print("Pose metadata missing; skipping pose-applied outputs.")
+                save_transformed_mesh(src_mesh, pose_mesh, scaled_pose_vec, r_total, t_total)
+
+        if args.save_posed:
+            posed_json = output_dir / f"{stem}_posed.json"
+            posed_out = {
+                "rotation_matrix": pose_r.tolist(),
+                "translation": pose_t.tolist(),
+                "scale": pose_only_scale_vec.tolist(),
+            }
+            with posed_json.open("w", encoding="utf-8") as f:
+                json.dump(posed_out, f, indent=2)
+
+            posed_points = apply_pose(raw_points, pose_only_scale_vec, pose_r, pose_t)
+            posed_ply = output_dir / f"{stem}_posed.ply"
+            write_pose_ply(raw_ply, posed_points, posed_ply, pose_only_scale_vec)
+            for ext in ("glb", "ply", "obj"):
+                src_mesh = sam3d_dir / f"{stem}_mesh.{ext}"
+                if src_mesh.exists():
+                    posed_mesh = output_dir / f"{stem}_posed_mesh.{ext}"
+                    save_transformed_mesh(src_mesh, posed_mesh, pose_only_scale_vec, pose_r, pose_t)
 
     if viz_scale is None:
         viz_scale = scale

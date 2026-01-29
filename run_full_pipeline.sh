@@ -636,7 +636,6 @@ PY
     --mask "${mask_path}" \
     --sam3d-config "${sam3d_config}" \
     --output "${output_path}" \
-    --pose-output-dir "${scale_out_dir}" \
     --seed "${sam3d_seed}" \
     --pose-rot-transpose \
     "${sam3d_pointmap_flags[@]}" \
@@ -651,10 +650,7 @@ PY
   fi
 
   if [[ -n "${target_npz}" ]]; then
-    sam3d_pose_ply="${scale_out_dir}/${mask_stem}_pose.ply"
-    if [[ ! -f "${sam3d_pose_ply}" ]]; then
-      sam3d_pose_ply="${sam3d_out_dir}/${mask_stem}_pose.ply"
-    fi
+    sam3d_pose_ply="${sam3d_out_dir}/${mask_stem}_pose.ply"
 
     scale_flags=()
     if [[ ${fine_registration} -eq 1 ]]; then
