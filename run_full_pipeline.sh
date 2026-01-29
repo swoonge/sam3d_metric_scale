@@ -672,7 +672,7 @@ PY
       --output-scale "${scale_txt}" \
       --output-scaled-ply "${scaled_ply}" \
       --icp-max-iters "${icp_max_iters}" \
-      --scale-mode "${scale_mode}" \
+      --mode "${scale_mode}" \
       --teaser-estimate-scaling \
       --teaser-noise-bound "${teaser_noise_bound}" \
       --teaser-nn-max-points "${teaser_nn_max_points}" \
