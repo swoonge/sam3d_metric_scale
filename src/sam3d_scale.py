@@ -136,12 +136,12 @@ def save_transformed_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray,
     mesh_t.export(out_path)
 
 
-def save_scaled_mesh(src_path: Path, out_path: Path, scale: float) -> None:
+def save_scaled_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray) -> None:
     mesh = load_mesh(src_path)
     if mesh is None:
         return
     transform = np.eye(4, dtype=np.float32)
-    transform[:3, :3] = np.eye(3, dtype=np.float32) * float(scale)
+    transform[:3, :3] = np.diag(scale_vec.astype(np.float32))
     mesh_t = mesh.copy()
     mesh_t.apply_transform(transform)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -505,7 +505,7 @@ def main() -> int:
         src_mesh = sam3d_dir / f"{stem}_mesh.{ext}"
         if src_mesh.exists():
             scaled_mesh = output_dir / f"{stem}_scaled_mesh.{ext}"
-            save_scaled_mesh(src_mesh, scaled_mesh, float(np.mean(final_scale_vec)))
+            save_scaled_mesh(src_mesh, scaled_mesh, final_scale_vec)
 
     if pose_r is None or pose_t is None or pose_s is None:
         print("Pose metadata missing; skipping pose-applied outputs.")
