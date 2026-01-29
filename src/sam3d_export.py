@@ -354,12 +354,24 @@ def save_pose_transformed_mesh(
         import trimesh
     except ImportError:
         return
+    ply_axis_fix = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, -1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
     if isinstance(mesh, trimesh.Trimesh):
         mesh_t = mesh.copy()
         transform = np.eye(4, dtype=np.float32)
         transform[:3, :3] = rotation @ np.diag(scale.astype(np.float32))
         transform[:3, 3] = translation.astype(np.float32)
         mesh_t.apply_transform(transform)
+        if output_path.suffix.lower() == ".ply":
+            ply_transform = np.eye(4, dtype=np.float32)
+            ply_transform[:3, :3] = ply_axis_fix
+            mesh_t.apply_transform(ply_transform)
         mesh_t.export(output_path)
 
 
@@ -703,7 +715,18 @@ def main() -> int:
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if args.mesh_format in ("ply", "both", "all"):
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.ply")
-                    mesh.export(mesh_path)
+                    mesh_to_export = mesh.copy()
+                    ply_transform = np.eye(4, dtype=np.float32)
+                    ply_transform[:3, :3] = np.array(
+                        [
+                            [1.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                            [0.0, -1.0, 0.0],
+                        ],
+                        dtype=np.float32,
+                    )
+                    mesh_to_export.apply_transform(ply_transform)
+                    mesh_to_export.export(mesh_path)
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if args.mesh_format in ("obj", "all"):
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.obj")

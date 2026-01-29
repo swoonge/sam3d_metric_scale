@@ -137,6 +137,17 @@ def save_transformed_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray,
     transform[:3, 3] = trans.astype(np.float32)
     mesh_t = mesh.copy()
     mesh_t.apply_transform(transform)
+    if out_path.suffix.lower() == ".ply":
+        ply_transform = np.eye(4, dtype=np.float32)
+        ply_transform[:3, :3] = np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, -1.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        mesh_t.apply_transform(ply_transform)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mesh_t.export(out_path)
 
@@ -149,6 +160,17 @@ def save_scaled_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray) -> N
     transform[:3, :3] = np.diag(scale_vec.astype(np.float32))
     mesh_t = mesh.copy()
     mesh_t.apply_transform(transform)
+    if out_path.suffix.lower() == ".ply":
+        ply_transform = np.eye(4, dtype=np.float32)
+        ply_transform[:3, :3] = np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, -1.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        mesh_t.apply_transform(ply_transform)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mesh_t.export(out_path)
 
