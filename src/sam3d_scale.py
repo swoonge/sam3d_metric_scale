@@ -193,6 +193,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also save pose-only outputs (_posed.*) without global scale.",
     )
+    parser.add_argument(
+        "--estimate-scale",
+        action="store_true",
+        help="Estimate extra scale against target points (default: pass-through).",
+    )
 
     # ICP 옵션
     parser.add_argument("--icp-max-iters", type=int, default=30)
@@ -395,11 +400,14 @@ def main() -> int:
     refine_registration = args.fine_registration or args.refine_registration
 
     if args.mode == "scale_only":
-        denom = float(np.sum(sam_sample * sam_sample))
-        if denom <= 0:
-            print("Invalid SAM3D points for scale-only estimation.")
-            return 1
-        scale_value = float(np.sum(sam_sample * moge_sample) / denom)
+        if not args.estimate_scale:
+            scale_value = 1.0
+        else:
+            denom = float(np.sum(sam_sample * sam_sample))
+            if denom <= 0:
+                print("Invalid SAM3D points for scale-only estimation.")
+                return 1
+            scale_value = float(np.sum(sam_sample * moge_sample) / denom)
         r = np.eye(3, dtype=np.float32)
         t = np.zeros(3, dtype=np.float32)
         result = {
@@ -413,7 +421,7 @@ def main() -> int:
             "metrics": {
                 "noise_bound": 0.0,
                 "corr_count": 0,
-                "corr_mode": "scale_only",
+                "corr_mode": "scale_only" if args.estimate_scale else "pass_through",
                 "iterations": 1,
                 "voxel_size": 0.0,
                 "icp_refine": False,

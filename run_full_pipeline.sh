@@ -52,6 +52,7 @@ run_moge=0
 scale_algo="teaserpp"
 scale_mode="scale_only"
 fine_registration=0
+estimate_scale=0
 icp_max_iters=1
 
 # real depth filtering (stricter than MoGe)
@@ -109,6 +110,7 @@ Options:
   --min-pixels INT          Minimum valid pixels for scale
   --scale-algo NAME         icp | teaserpp (default: teaserpp)
   --scale-mode NAME         default | scale_only (default: scale_only)
+  --estimate-scale          Enable scale estimation against target points
   --fine-registration       After scale-only, run TEASER++ (no scale) once for R/t refine
   --icp-max-iters INT       ICP max iterations (default: 1)
   --scale-show-viz          Visualize alignment after scale matching
@@ -214,6 +216,10 @@ while [[ $# -gt 0 ]]; do
     --scale-mode)
       scale_mode="$2"
       shift 2
+      ;;
+    --estimate-scale)
+      estimate_scale=1
+      shift 1
       ;;
     --fine-registration)
       fine_registration=1
@@ -653,6 +659,9 @@ PY
     sam3d_pose_ply="${sam3d_out_dir}/${mask_stem}_pose.ply"
 
     scale_flags=()
+    if [[ ${estimate_scale} -eq 1 ]]; then
+      scale_flags+=("--estimate-scale")
+    fi
     if [[ ${fine_registration} -eq 1 ]]; then
       scale_flags+=("--fine-registration")
     fi
