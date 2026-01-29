@@ -651,8 +651,11 @@ def main() -> int:
             show=True,
         )
 
-    # 표준 출력은 스케일 값만 출력
-    print(scale_str)
+    # 표준 출력은 최종 스케일(요약) 출력
+    if np.allclose(final_scale_vec, final_scale_vec[0], rtol=1e-5, atol=1e-6):
+        print(f"{final_scale_vec[0]:.6f}".rstrip("0").rstrip("."))
+    else:
+        print(" ".join(f"{v:.6f}".rstrip("0").rstrip(".") for v in final_scale_vec.tolist()))
     return 0
 
 
