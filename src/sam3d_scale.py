@@ -472,12 +472,26 @@ def main() -> int:
         scale = float(result["scale"])
         r = result.get("r")
         t = result.get("t")
+    base_scale_vec = pose_s if pose_s is not None else np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    extra_scale = float(scale)
+    final_scale_vec = base_scale_vec * extra_scale
+
+    def _fmt_vec(vec: np.ndarray) -> str:
+        return "[" + ", ".join(f"{v:.6f}".rstrip("0").rstrip(".") for v in vec.tolist()) + "]"
+
+    print(f"Base scale: {_fmt_vec(base_scale_vec)}")
+    print(f"Extra scale: {extra_scale:.6f}".rstrip("0").rstrip("."))
+    print(f"Final scale: {_fmt_vec(final_scale_vec)}")
+
     scale_path = (
         resolve_path(args.output_scale, Path.cwd())
         if args.output_scale
         else output_dir / f"{stem}_scale.txt"
     )
-    scale_str = f"{scale:.6f}".rstrip("0").rstrip(".")
+    if np.allclose(final_scale_vec, final_scale_vec[0], rtol=1e-5, atol=1e-6):
+        scale_str = f"{final_scale_vec[0]:.6f}".rstrip("0").rstrip(".")
+    else:
+        scale_str = " ".join(f"{v:.6f}".rstrip("0").rstrip(".") for v in final_scale_vec.tolist())
     with scale_path.open("w", encoding="utf-8") as f:
         f.write(scale_str + "\n")
 
@@ -485,19 +499,19 @@ def main() -> int:
         scaled_path = resolve_path(args.output_scaled_ply, Path.cwd())
     else:
         scaled_path = output_dir / f"{stem}_scaled.ply"
-    write_scaled_ply(raw_ply, raw_points * scale, scaled_path, scale)
+    write_scaled_ply(raw_ply, raw_points * final_scale_vec, scaled_path, float(np.mean(final_scale_vec)))
 
     for ext in ("glb", "ply", "obj"):
         src_mesh = sam3d_dir / f"{stem}_mesh.{ext}"
         if src_mesh.exists():
             scaled_mesh = output_dir / f"{stem}_scaled_mesh.{ext}"
-            save_scaled_mesh(src_mesh, scaled_mesh, scale)
+            save_scaled_mesh(src_mesh, scaled_mesh, float(np.mean(final_scale_vec)))
 
     if pose_r is None or pose_t is None or pose_s is None:
         print("Pose metadata missing; skipping pose-applied outputs.")
     else:
         pose_only_scale_vec = pose_s
-        scaled_pose_vec = pose_s * scale
+        scaled_pose_vec = final_scale_vec
 
         r_total = pose_r
         t_total = pose_t
