@@ -488,12 +488,13 @@ def main() -> int:
         if args.output_scale
         else output_dir / f"{stem}_scale.txt"
     )
-    if np.allclose(final_scale_vec, final_scale_vec[0], rtol=1e-5, atol=1e-6):
-        scale_str = f"{final_scale_vec[0]:.6f}".rstrip("0").rstrip(".")
-    else:
-        scale_str = " ".join(f"{v:.6f}".rstrip("0").rstrip(".") for v in final_scale_vec.tolist())
     with scale_path.open("w", encoding="utf-8") as f:
-        f.write(scale_str + "\n")
+        base_str = _fmt_vec(base_scale_vec)
+        extra_str = f"{extra_scale:.6f}".rstrip("0").rstrip(".")
+        final_str = _fmt_vec(final_scale_vec)
+        f.write(f"base: {base_str}\n")
+        f.write(f"extra: {extra_str}\n")
+        f.write(f"final: {final_str}\n")
 
     if args.output_scaled_ply is not None:
         scaled_path = resolve_path(args.output_scaled_ply, Path.cwd())
