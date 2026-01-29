@@ -17,7 +17,8 @@ repo_root="${script_dir}"
 sam2_env="sam2"
 sam3d_env="sam3d-objects"
 moge_env="moge"
-scale_env="teaserpp"
+scale_env=""
+scale_env_set=0
 
 default_image="${repo_root}/sam2/notebooks/videos/bedroom/00031.jpg"
 if [[ ! -f "${default_image}" && -f "${repo_root}/../sam2/notebooks/videos/bedroom/00031.jpg" ]]; then
@@ -49,7 +50,7 @@ cam_k_path="/home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_26012
 run_moge=0
 
 # Scale matching options
-scale_algo="teaserpp"
+scale_algo="icp"
 scale_mode="scale_only"
 fine_registration=0
 estimate_scale=0
@@ -77,15 +78,7 @@ teaser_icp_refine=1
 teaser_icp_max_iters=100
 teaser_icp_distance=0
 teaser_estimate_scaling=1
-scale_show_viz=0
-scale_viz_method="open3d"
-
 process_all=1
-
-# disable open3d viz in headless environments
-if [[ -z "${DISPLAY-}" ]]; then
-  scale_show_viz=0
-fi
 
 usage() {
   cat <<USAGE
@@ -99,7 +92,7 @@ Options:
   --latest                  Process latest mask only (default: all)
   --sam2-env NAME           Conda env for SAM2 (default: sam2)
   --sam3d-env NAME          Conda env for SAM3D (default: sam3d-objects)
-  --scale-env NAME          Conda env for scale estimation (default: teaserpp)
+  --scale-env NAME          Conda env for scale estimation (default: sam3d-objects for icp, teaserpp for teaserpp)
   --sam3d-config PATH       SAM3D pipeline.yaml path
   --sam3d-seed INT          Seed for SAM3D inference
   --sam3d-compile           Enable compile flag for SAM3D
@@ -108,13 +101,11 @@ Options:
   --moge-model NAME         HF model id or local path
   --scale-method NAME       bbox_diag | bbox_max (default: bbox_diag)
   --min-pixels INT          Minimum valid pixels for scale
-  --scale-algo NAME         icp | teaserpp (default: teaserpp)
+  --scale-algo NAME         icp | teaserpp (default: icp)
   --scale-mode NAME         default | scale_only (default: scale_only)
   --estimate-scale          Enable scale estimation against target points
   --fine-registration       After scale-only, run TEASER++ (no scale) once for R/t refine
   --icp-max-iters INT       ICP max iterations (default: 1)
-  --scale-show-viz          Visualize alignment after scale matching
-  --scale-viz-method NAME   open3d | matplotlib (default: open3d)
   --cam-k PATH              Camera intrinsics (3x3) for real depth backprojection
   -h, --help                Show this help
 USAGE
@@ -175,6 +166,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --scale-env)
       scale_env="$2"
+      scale_env_set=1
       shift 2
       ;;
     --sam3d-config)
@@ -229,14 +221,6 @@ while [[ $# -gt 0 ]]; do
       icp_max_iters="$2"
       shift 2
       ;;
-    --scale-show-viz)
-      scale_show_viz=1
-      shift 1
-      ;;
-    --scale-viz-method)
-      scale_viz_method="$2"
-      shift 2
-      ;;
     --cam-k)
       cam_k_path="$2"
       shift 2
@@ -256,6 +240,15 @@ done
 if ! command -v conda >/dev/null 2>&1; then
   echo "conda not found in PATH"
   exit 1
+fi
+
+# scale env 기본값 결정(알고리즘별)
+if [[ ${scale_env_set} -eq 0 ]]; then
+  if [[ "${scale_algo}" == "teaserpp" ]]; then
+    scale_env="teaserpp"
+  else
+    scale_env="${sam3d_env}"
+  fi
 fi
 
 # 최종 경로 정규화
@@ -609,7 +602,7 @@ PY
     REAL_DEPTH_MAD="${real_depth_mad}" \
     REAL_RADIUS_MAD="${real_radius_mad}" \
     REAL_MIN_POINTS="${real_min_points}" \
-    conda run -n "${moge_env}" python "${real_tmp_script}"
+    conda run -n "${sam3d_env}" python "${real_tmp_script}"
     rm -f "${real_tmp_script}"
 
   fi
@@ -669,9 +662,6 @@ PY
     fi
     if [[ ${fine_registration} -eq 1 ]]; then
       scale_flags+=("--fine-registration")
-    fi
-    if [[ ${scale_show_viz} -eq 1 ]]; then
-      scale_flags+=("--show-viz" "--viz-method" "${scale_viz_method}")
     fi
 
     conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \

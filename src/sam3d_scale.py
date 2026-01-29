@@ -1,6 +1,6 @@
-"""SAM3D 스케일 추정 알고리즘 테스트 러너.
+"""SAM3D 스케일 추정 알고리즘 실행기.
 
-알고리즘 구현은 별도 파일로 분리되어 있으며, 여기서는 공통 입출력/시각화를 담당한다.
+알고리즘 구현은 별도 파일로 분리되어 있으며, 여기서는 공통 입출력을 담당한다.
 """
 
 from __future__ import annotations
@@ -12,15 +12,11 @@ from pathlib import Path
 import numpy as np
 
 from sam3d_scale_icp import estimate_scale as estimate_scale_icp
-from sam3d_scale_teaserpp import estimate_scale as estimate_scale_teaserpp
 from sam3d_scale_utils import (
     load_moge_points,
     load_ply_points,
     resolve_path,
     sample_points,
-    visualize_debug_views,
-    visualize_alignment,
-    visualize_alignment_open3d,
     write_scaled_ply,
 )
 
@@ -292,28 +288,6 @@ def parse_args() -> argparse.Namespace:
         help="ICP max correspondence distance (<=0 uses noise bound).",
     )
 
-    # 시각화 옵션
-    parser.add_argument(
-        "--show-viz",
-        action="store_true",
-        help="Show alignment/matching visualization.",
-    )
-    parser.add_argument("--save-viz", action="store_true")
-    parser.add_argument(
-        "--debug-viz",
-        action="store_true",
-        help="Show debug 5-panel view for transform direction check.",
-    )
-    parser.add_argument(
-        "--viz-method",
-        choices=["matplotlib", "open3d"],
-        default="matplotlib",
-        help="Visualization backend (default: matplotlib).",
-    )
-    parser.add_argument("--viz-path", type=Path, default=None)
-    parser.add_argument("--viz-dpi", type=int, default=150)
-    parser.add_argument("--viz-max-points", type=int, default=5000)
-    parser.add_argument("--viz-max-pairs", type=int, default=200)
     return parser.parse_args()
 
 
@@ -330,6 +304,8 @@ def pick_algorithm(args: argparse.Namespace, src: np.ndarray, dst: np.ndarray) -
             seed=args.seed,
         )
     if args.algo == "teaserpp":
+        from sam3d_scale_teaserpp import estimate_scale as estimate_scale_teaserpp
+
         return estimate_scale_teaserpp(
             src,
             dst,
@@ -422,8 +398,6 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stem = base_stem
-    viz_src = pose_points
-    viz_scale = None
     refine_registration = args.fine_registration or args.refine_registration
 
     if args.mode == "scale_only":
@@ -491,8 +465,6 @@ def main() -> int:
                         },
                     }
                 )
-                viz_src = pose_points * scale_value
-                viz_scale = 1.0
         scale = scale_value
     else:
         result = pick_algorithm(args, sam_sample, moge_sample)
@@ -594,95 +566,6 @@ def main() -> int:
                     save_transformed_mesh(src_mesh, posed_mesh, pose_only_scale_vec, pose_r, pose_t)
                 else:
                     print(f"Missing mesh source: {src_mesh}")
-
-    if viz_scale is None:
-        viz_scale = scale
-    if args.show_viz or args.save_viz:
-        matched_src = result.get("matched_src")
-        matched_dst = result.get("matched_dst")
-        match_mask = result.get("match_mask")
-        inlier_indices = result.get("inlier_indices")
-        if match_mask is not None and matched_src is not None and matched_dst is not None:
-            matched_src = matched_src[match_mask]
-            matched_dst = matched_dst[match_mask]
-
-        viz_path = None
-        if args.save_viz:
-            if args.viz_path is not None:
-                viz_path = resolve_path(args.viz_path, Path.cwd())
-            else:
-                viz_path = output_dir / f"{stem}_{args.algo}_match.png"
-
-        if args.show_viz and args.viz_method == "open3d":
-            inlier_dst = None
-            if matched_dst is not None:
-                if inlier_indices is not None:
-                    idx = np.asarray(list(inlier_indices), dtype=int)
-                    idx = idx[(idx >= 0) & (idx < matched_dst.shape[0])]
-                    if idx.size:
-                        inlier_dst = matched_dst[idx]
-                elif match_mask is not None:
-                    inlier_dst = matched_dst
-            visualize_alignment_open3d(
-                viz_src,
-                moge_points,
-                viz_scale,
-                r,
-                t,
-                matched_dst=inlier_dst,
-                max_points=args.viz_max_points,
-                max_spheres=args.viz_max_pairs,
-                seed=args.seed,
-                title=f"{args.algo} alignment",
-            )
-        else:
-            visualize_alignment(
-                viz_src,
-                moge_points,
-                viz_scale,
-                r,
-                t,
-                matched_src=matched_src,
-                matched_dst=matched_dst,
-                max_points=args.viz_max_points,
-                max_pairs=args.viz_max_pairs,
-                seed=args.seed,
-                title=f"{args.algo} alignment",
-                save_path=viz_path,
-                show=args.show_viz,
-                dpi=args.viz_dpi,
-            )
-
-        if args.save_viz and args.viz_method == "open3d":
-            visualize_alignment(
-                viz_src,
-                moge_points,
-                viz_scale,
-                r,
-                t,
-                matched_src=matched_src,
-                matched_dst=matched_dst,
-                max_points=args.viz_max_points,
-                max_pairs=args.viz_max_pairs,
-                seed=args.seed,
-                title=f"{args.algo} alignment",
-                save_path=viz_path,
-                show=False,
-                dpi=args.viz_dpi,
-            )
-
-    if args.debug_viz:
-        visualize_debug_views(
-            moge_points,
-            viz_src,
-            scale,
-            r,
-            t,
-            max_points=args.viz_max_points,
-            seed=args.seed,
-            title_prefix=f"{args.algo} ",
-            show=True,
-        )
 
     # 표준 출력은 최종 스케일(요약) 출력
     if np.allclose(final_scale_vec, final_scale_vec[0], rtol=1e-5, atol=1e-6):

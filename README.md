@@ -1,6 +1,6 @@
 # sam3d_metric_scale
 
-단일 이미지에서 SAM2 마스크 → MoGe2 metric depth → SAM3D 3D 결과를 생성하고, 스케일 보정 연구를 위한 파이프라인을 제공하는 로컬 레포입니다.
+RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 추정) 깊이 기반으로 스케일이 보정된 3D 결과를 얻기 위한 로컬 파이프라인입니다.
 
 ## GitHub 레포 디스크립션
 - Description: Single-image SAM2 → MoGe2 → SAM3D pipeline for metric scale research and visualization.
@@ -13,10 +13,8 @@
   - `moge_scale.py`: 마스크 영역 MoGe depth + 스케일 추정
   - `sam3d_export.py`: 이미지+마스크 → SAM3D 결과(.ply)
   - `sam3d_scale.py`: 스케일 알고리즘 테스트 러너(ICP/TEASER++)
-  - `sam3d_scale_icp.py`: Umeyama + ICP 스케일 추정
   - `sam3d_scale_teaserpp.py`: TEASER++ 기반 스케일 추정
   - `sam3d_scale_utils.py`: 공통 유틸 + 매칭 시각화
-  - `visualize_outputs.py`: 결과 폴더 기반 통합 시각화
 - `datas/`: 샘플 이미지
 - `outputs/`: 결과 저장(자동 생성, gitignored)
 - 외부 레포(로컬 의존, gitignored): `sam2/`, `sam-3d-objects/`, `MoGe/`, (옵션) `TEASER-plusplus/`
@@ -31,7 +29,9 @@
 - 원본 이미지는 출력 루트에 복사됩니다.
 
 ## 사전 준비
-- Conda env: `sam2`, `sam3d-objects`, `moge` (옵션) `teaserpp`
+- Conda env: `sam2`, `sam3d-objects`, `moge` (옵션), `teaserpp` (TEASER++ 사용 시에만 필요)
+  - `--run-moge`를 주지 않으면 MoGe 환경은 필요 없습니다.
+  - 기본 `--scale-algo`는 `icp`라서 TEASER++ 환경 없이도 실행됩니다.
 - 외부 레포 위치:
   - `sam2/`, `sam-3d-objects/`, `MoGe/`를 이 레포 루트에 두는 구성을 권장합니다.
   - 다른 위치라면 `SAM2_ROOT`, `SAM3D_ROOT`, `MOGE_ROOT`로 지정하세요.
@@ -113,19 +113,12 @@ PY
   --output-base outputs/demo
 ```
 
-### 2) 결과 시각화 UI
-```bash
-./run_visualize_outputs.sh \
-  --output-root outputs/demo
-```
-
-### 3) 스케일 알고리즘 단독 실행
+### 2) 스케일 알고리즘 단독 실행
 ```bash
 conda run -n sam3d-objects python src/sam3d_scale.py \
   --sam3d-ply /path/to/sam3d.ply \
   --moge-npz /path/to/moge_output.npz \
-  --algo icp \
-  --show-viz
+  --algo icp
 ```
 TEASER++ 예시:
 ```bash
@@ -148,10 +141,7 @@ conda run -n teaserpp python src/sam3d_scale.py \
 - `MOGE_ROOT`: MoGe 레포 경로
 
 ## 시각화 의존성
-- 스케일 매칭 시각화(`sam3d_scale.py --show-viz`)는 `matplotlib`가 필요합니다.
-```bash
-conda run -n sam3d-objects python -m pip install matplotlib
-```
+- 파이프라인은 기본적으로 시각화를 포함하지 않습니다. 필요 시 별도 도구로 출력 결과를 확인하세요.
 
 ## 트러블슈팅
 - `ModuleNotFoundError: sam2`  
