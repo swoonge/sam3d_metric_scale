@@ -119,7 +119,7 @@ def backproject_depth(
     ys, xs = np.where(valid_mask)
     z = depth[valid_mask].astype(np.float32)
     x = (xs - cx) * z / fx
-    y = -(ys - cy) * z / fy
+    y = (ys - cy) * z / fy
     return np.stack([x, y, z], axis=1).astype(np.float32)
 
 

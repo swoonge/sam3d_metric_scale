@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
             "icp",
             "teaserpp",
         ],
-        default="icp",
+        default="teaserpp",
         help="Scale estimation algorithm.",
     )
     parser.add_argument("--output-scale", type=Path, default=None)
@@ -45,6 +45,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--max-points", type=int, default=30000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--mode",
+        choices=["default", "scale_only"],
+        default="scale_only",
+        help=(
+            "default: use sam3d-ply + moge-npz; "
+            "scale_only: assume pose is aligned and estimate scale only."
+        ),
+    )
+    parser.add_argument(
+        "--fine-registration",
+        action="store_true",
+        help="After scale-only, run TEASER++ once (without scale) for R/t refinement.",
+    )
 
     # ICP 옵션
     parser.add_argument("--icp-max-iters", type=int, default=30)
@@ -72,9 +86,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teaser-iterations", type=int, default=1)
     parser.add_argument(
         "--teaser-correspondence",
-        choices=["fpfh"],
-        default="fpfh",
-        help="Correspondence mode for TEASER++.",
+        choices=["nn", "fpfh"],
+        default="nn",
+        help="Correspondence mode for TEASER++ (nn: raw XYZ, fpfh: Open3D FPFH).",
     )
     parser.add_argument(
         "--teaser-fpfh-voxel",
@@ -113,7 +127,11 @@ def parse_args() -> argparse.Namespace:
     )
 
     # 시각화 옵션
-    parser.add_argument("--show-viz", action="store_true")
+    parser.add_argument(
+        "--show-viz",
+        action="store_true",
+        help="Show alignment/matching visualization.",
+    )
     parser.add_argument("--save-viz", action="store_true")
     parser.add_argument(
         "--debug-viz",
@@ -219,10 +237,79 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stem = sam3d_ply.stem
-    result = pick_algorithm(args, sam_sample, moge_sample)
-    scale = float(result["scale"])
-    r = result.get("r")
-    t = result.get("t")
+    viz_src = sam_points
+    viz_scale = None
+    if args.mode == "scale_only":
+        denom = float(np.sum(sam_sample * sam_sample))
+        if denom <= 0:
+            print("Invalid SAM3D points for scale-only estimation.")
+            return 1
+        scale_value = float(np.sum(sam_sample * moge_sample) / denom)
+        r = np.eye(3, dtype=np.float32)
+        t = np.zeros(3, dtype=np.float32)
+        result = {
+            "scale": scale_value,
+            "r": r,
+            "t": t,
+            "matched_src": None,
+            "matched_dst": None,
+            "match_mask": None,
+            "inlier_indices": None,
+            "metrics": {
+                "noise_bound": 0.0,
+                "corr_count": 0,
+                "corr_mode": "scale_only",
+                "iterations": 1,
+                "voxel_size": 0.0,
+                "icp_refine": False,
+            },
+        }
+        if args.fine_registration:
+            sam_sample_scaled = sam_sample * scale_value
+            fine = estimate_scale_teaserpp(
+                sam_sample_scaled,
+                moge_sample,
+                nn_max_points=args.teaser_nn_max_points,
+                max_correspondences=args.teaser_max_correspondences,
+                noise_bound=args.teaser_noise_bound,
+                cbar2=args.teaser_cbar2,
+                gnc_factor=args.teaser_gnc_factor,
+                rot_max_iters=args.teaser_rot_max_iters,
+                estimate_scaling=False,
+                iterations=1,
+                correspondence=args.teaser_correspondence,
+                fpfh_voxel=args.teaser_fpfh_voxel,
+                fpfh_normal_radius=args.teaser_fpfh_normal_radius,
+                fpfh_feature_radius=args.teaser_fpfh_feature_radius,
+                icp_refine=args.teaser_icp_refine,
+                icp_max_iters=args.teaser_icp_max_iters,
+                icp_distance=args.teaser_icp_distance,
+                seed=args.seed,
+            )
+            r = fine.get("r")
+            t = fine.get("t")
+            result.update(
+                {
+                    "r": r,
+                    "t": t,
+                    "matched_src": fine.get("matched_src"),
+                    "matched_dst": fine.get("matched_dst"),
+                    "match_mask": fine.get("match_mask"),
+                    "inlier_indices": fine.get("inlier_indices"),
+                    "metrics": {
+                        **result["metrics"],
+                        "corr_mode": "scale_only+teaser",
+                    },
+                }
+            )
+            viz_src = sam_points * scale_value
+            viz_scale = 1.0
+        scale = scale_value
+    else:
+        result = pick_algorithm(args, sam_sample, moge_sample)
+        scale = float(result["scale"])
+        r = result.get("r")
+        t = result.get("t")
     scale_path = (
         resolve_path(args.output_scale, Path.cwd())
         if args.output_scale
@@ -238,7 +325,8 @@ def main() -> int:
         scaled_path = output_dir / f"{stem}_scaled.ply"
     write_scaled_ply(ply, sam_points * scale, scaled_path, scale)
 
-    viz_src = sam_points
+    if viz_scale is None:
+        viz_scale = scale
     if args.show_viz or args.save_viz:
         matched_src = result.get("matched_src")
         matched_dst = result.get("matched_dst")
@@ -268,7 +356,7 @@ def main() -> int:
             visualize_alignment_open3d(
                 viz_src,
                 moge_points,
-                scale,
+                viz_scale,
                 r,
                 t,
                 matched_dst=inlier_dst,
@@ -281,7 +369,7 @@ def main() -> int:
             visualize_alignment(
                 viz_src,
                 moge_points,
-                scale,
+                viz_scale,
                 r,
                 t,
                 matched_src=matched_src,
@@ -299,7 +387,7 @@ def main() -> int:
             visualize_alignment(
                 viz_src,
                 moge_points,
-                scale,
+                viz_scale,
                 r,
                 t,
                 matched_src=matched_src,

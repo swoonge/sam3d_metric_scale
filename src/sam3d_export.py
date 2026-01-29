@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import torch
 
 import sam3d_scale_utils as scale_utils
 
@@ -44,6 +45,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=default_output_dir)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--depth-image", type=Path, default=None)
+    parser.add_argument(
+        "--cam-k",
+        type=Path,
+        default=None,
+        help="Camera intrinsics (3x3) when using depth as pointmap input.",
+    )
+    parser.add_argument(
+        "--depth-scale",
+        type=float,
+        default=1.0,
+        help="Depth scale to convert depth image to meters (default: 1.0).",
+    )
+    parser.add_argument(
+        "--pointmap-from-depth",
+        action="store_true",
+        help="Use depth image to build pointmap input for SAM3D.",
+    )
+    parser.add_argument(
+        "--pointmap-mask",
+        dest="pointmap_mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Mask out background when building pointmap from depth (default: enabled).",
+    )
     parser.add_argument("--ply", type=Path, default=None, help="PLY path for viz-only mode.")
     parser.add_argument(
         "--save-pointmap",
@@ -132,6 +158,42 @@ def load_ply_points(path: Path):
         colors = np.clip(colors + 0.5, 0.0, 1.0)
 
     return points, colors
+
+
+def read_cam_k(path: Path) -> np.ndarray:
+    """3x3 intrinsics 텍스트 파일 로드."""
+    content = path.read_text(encoding="utf-8").strip().split()
+    values = [float(v) for v in content if v]
+    if len(values) == 9:
+        return np.array(values, dtype=np.float32).reshape(3, 3)
+    raise ValueError(f"Invalid camera intrinsics file: {path}")
+
+
+def load_depth_image(path: Path, scale: float) -> np.ndarray:
+    """Depth 이미지를 float32로 로드하고 스케일 적용."""
+    import cv2
+
+    depth = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if depth is None:
+        raise ValueError(f"Failed to read depth image: {path}")
+    if depth.ndim == 3:
+        depth = depth[:, :, 0]
+    depth = depth.astype(np.float32)
+    if scale != 1.0:
+        depth *= float(scale)
+    return depth
+
+
+def depth_to_pointmap(depth: np.ndarray, cam_k: np.ndarray) -> np.ndarray:
+    """Depth(H,W) -> pointmap(H,W,3) in camera frame."""
+    h, w = depth.shape
+    fx, fy = float(cam_k[0, 0]), float(cam_k[1, 1])
+    cx, cy = float(cam_k[0, 2]), float(cam_k[1, 2])
+    ys, xs = np.meshgrid(np.arange(h, dtype=np.float32), np.arange(w, dtype=np.float32), indexing="ij")
+    z = depth
+    x = (xs - cx) * z / fx
+    y = (ys - cy) * z / fy
+    return np.stack([x, y, z], axis=-1)
 
 
 def flatten_pointmap(pointmap_hwc: np.ndarray, colors_hwc: np.ndarray | None) -> tuple[np.ndarray, np.ndarray | None]:
@@ -476,8 +538,56 @@ def main() -> int:
     image = load_image(str(image_path))
     mask = load_mask(str(mask_path))
 
+    pointmap_input = None
+    if args.pointmap_from_depth:
+        if args.depth_image is None or args.cam_k is None:
+            raise ValueError("--pointmap-from-depth requires --depth-image and --cam-k.")
+        depth_path = resolve_path(args.depth_image, Path.cwd())
+        cam_k_path = resolve_path(args.cam_k, Path.cwd())
+        if not depth_path.exists():
+            raise ValueError(f"Missing depth image: {depth_path}")
+        if not cam_k_path.exists():
+            raise ValueError(f"Missing camera intrinsics: {cam_k_path}")
+
+        depth = load_depth_image(depth_path, args.depth_scale)
+        cam_k = read_cam_k(cam_k_path)
+        if depth.shape[:2] != image.shape[:2]:
+            import cv2
+
+            depth = cv2.resize(
+                depth,
+                (image.shape[1], image.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        pointmap = depth_to_pointmap(depth, cam_k)
+        if args.pointmap_mask:
+            mask_bool = mask.astype(bool)
+            pointmap = pointmap.copy()
+            pointmap[~mask_bool] = 0.0
+
+        try:
+            from sam3d_objects.pipeline.inference_pipeline_pointmap import (
+                camera_to_pytorch3d_camera,
+            )
+            from pytorch3d.transforms import Transform3d
+
+            pointmap_tensor = torch.from_numpy(pointmap).float()
+            points_flat = pointmap_tensor.reshape(-1, 3)
+            cam_to_p3d = (
+                Transform3d()
+                .rotate(camera_to_pytorch3d_camera(device=points_flat.device).rotation)
+                .to(points_flat.device)
+            )
+            points_p3d = cam_to_p3d.transform_points(points_flat)
+            pointmap_input = {
+                "pointmap": points_p3d.reshape(pointmap_tensor.shape),
+                "intrinsics": cam_k,
+            }
+        except Exception as exc:
+            raise RuntimeError("Failed to convert pointmap to Pytorch3D frame.") from exc
+
     # SAM3D 추론 실행
-    output = inference(image, mask, seed=args.seed)
+    output = inference(image, mask, seed=args.seed, pointmap=pointmap_input)
     if "gs" not in output:
         print("SAM3D output missing 'gs' key")
         return 1

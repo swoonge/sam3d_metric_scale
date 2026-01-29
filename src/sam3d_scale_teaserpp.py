@@ -140,6 +140,37 @@ def _build_correspondences_fpfh(
     return src_points[src_idx], dst_points[dst_idx]
 
 
+def _build_correspondences_nn(
+    src: np.ndarray,
+    dst: np.ndarray,
+    nn_max_points: int,
+    max_correspondences: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    src_points = sample_points(src, nn_max_points, seed)
+    dst_points = sample_points(dst, nn_max_points, seed + 1)
+    src_points = src_points[np.isfinite(src_points).all(axis=1)]
+    dst_points = dst_points[np.isfinite(dst_points).all(axis=1)]
+
+    src_to_dst, src_dists = _knn_features(src_points, dst_points)
+    dst_to_src, _ = _knn_features(dst_points, src_points)
+    src_indices = np.arange(src_points.shape[0])
+    mutual = src_indices == dst_to_src[src_to_dst]
+    src_idx = src_indices[mutual]
+    dst_idx = src_to_dst[src_idx]
+
+    if src_idx.size == 0:
+        raise RuntimeError("No mutual NN correspondences found.")
+
+    if max_correspondences > 0 and src_idx.size > max_correspondences:
+        keep_n = max(3, max_correspondences)
+        keep_idx = np.argpartition(src_dists[src_idx], keep_n - 1)[:keep_n]
+        src_idx = src_idx[keep_idx]
+        dst_idx = dst_idx[keep_idx]
+
+    return src_points[src_idx], dst_points[dst_idx]
+
+
 def estimate_scale(
     src: np.ndarray,
     dst: np.ndarray,
@@ -151,7 +182,7 @@ def estimate_scale(
     rot_max_iters: int = 100,
     estimate_scaling: bool = False,
     iterations: int = 1,
-    correspondence: str = "fpfh",
+    correspondence: str = "nn",
     fpfh_voxel: float = 0.0,
     fpfh_normal_radius: float = 0.0,
     fpfh_feature_radius: float = 0.0,
@@ -171,7 +202,7 @@ def estimate_scale(
             "or build TEASER++ from source."
         ) from exc
 
-    mode = "fpfh"
+    mode = correspondence
 
     iterations = max(1, int(iterations))
     scale_total = 1.0
@@ -186,27 +217,44 @@ def estimate_scale(
     for it in range(iterations):
         last_scale_before = scale_total
         src_scaled = src * scale_total
-        voxel_size, normal_radius, feature_radius = _resolve_fpfh_params(
-            src_scaled,
-            dst,
-            voxel_size=fpfh_voxel,
-            normal_radius=fpfh_normal_radius,
-            feature_radius=fpfh_feature_radius,
-        )
-        last_voxel = float(voxel_size)
-        src_corr, dst_corr = _build_correspondences_fpfh(
-            src_scaled,
-            dst,
-            nn_max_points=nn_max_points,
-            max_correspondences=max_correspondences,
-            voxel_size=voxel_size,
-            normal_radius=normal_radius,
-            feature_radius=feature_radius,
-            seed=seed + it,
-        )
+        if correspondence == "fpfh":
+            voxel_size, normal_radius, feature_radius = _resolve_fpfh_params(
+                src_scaled,
+                dst,
+                voxel_size=fpfh_voxel,
+                normal_radius=fpfh_normal_radius,
+                feature_radius=fpfh_feature_radius,
+            )
+            last_voxel = float(voxel_size)
+            src_corr, dst_corr = _build_correspondences_fpfh(
+                src_scaled,
+                dst,
+                nn_max_points=nn_max_points,
+                max_correspondences=max_correspondences,
+                voxel_size=voxel_size,
+                normal_radius=normal_radius,
+                feature_radius=feature_radius,
+                seed=seed + it,
+            )
+        else:
+            voxel_size = 0.0
+            src_corr, dst_corr = _build_correspondences_nn(
+                src_scaled,
+                dst,
+                nn_max_points=nn_max_points,
+                max_correspondences=max_correspondences,
+                seed=seed + it,
+            )
 
         if noise_bound <= 0.0:
-            last_noise_bound = max(1e-6, float(voxel_size))
+            if correspondence == "fpfh":
+                last_noise_bound = max(1e-6, float(voxel_size))
+            else:
+                all_points = np.vstack([src_scaled, dst])
+                mins = all_points.min(axis=0)
+                maxs = all_points.max(axis=0)
+                diag = float(np.linalg.norm(maxs - mins))
+                last_noise_bound = max(1e-6, diag * FPFH_AUTO_RATIO)
         else:
             last_noise_bound = float(noise_bound)
 

@@ -47,6 +47,12 @@ scale_method="bbox_diag"
 min_pixels=100
 cam_k_path="/home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_box/cam_K.txt"
 
+# Scale matching options
+scale_algo="teaserpp"
+scale_mode="scale_only"
+fine_registration=0
+icp_max_iters=1
+
 # real depth filtering (stricter than MoGe)
 real_border_margin=5
 real_depth_mad=2.5
@@ -61,7 +67,7 @@ teaser_gnc_factor=1.4
 teaser_rot_max_iters=100
 teaser_cbar2=1.0
 teaser_iterations=2
-teaser_correspondence="fpfh"
+teaser_correspondence="nn"
 teaser_fpfh_voxel=0
 teaser_fpfh_normal_radius=0
 teaser_fpfh_feature_radius=0
@@ -69,14 +75,14 @@ teaser_icp_refine=1
 teaser_icp_max_iters=100
 teaser_icp_distance=0
 teaser_estimate_scaling=1
-teaser_show_viz=1
-teaser_viz_method="open3d"
+scale_show_viz=0
+scale_viz_method="open3d"
 
 process_all=1
 
 # disable open3d viz in headless environments
 if [[ -z "${DISPLAY-}" ]]; then
-  teaser_show_viz=0
+  scale_show_viz=0
 fi
 
 usage() {
@@ -99,6 +105,12 @@ Options:
   --moge-model NAME         HF model id or local path
   --scale-method NAME       bbox_diag | bbox_max (default: bbox_diag)
   --min-pixels INT          Minimum valid pixels for scale
+  --scale-algo NAME         icp | teaserpp (default: teaserpp)
+  --scale-mode NAME         default | scale_only (default: scale_only)
+  --fine-registration       After scale-only, run TEASER++ (no scale) once for R/t refine
+  --icp-max-iters INT       ICP max iterations (default: 1)
+  --scale-show-viz          Visualize alignment after scale matching
+  --scale-viz-method NAME   open3d | matplotlib (default: open3d)
   --cam-k PATH              Camera intrinsics (3x3) for real depth backprojection
   -h, --help                Show this help
 USAGE
@@ -189,6 +201,30 @@ while [[ $# -gt 0 ]]; do
       min_pixels="$2"
       shift 2
       ;;
+    --scale-algo)
+      scale_algo="$2"
+      shift 2
+      ;;
+    --scale-mode)
+      scale_mode="$2"
+      shift 2
+      ;;
+    --fine-registration)
+      fine_registration=1
+      shift 1
+      ;;
+    --icp-max-iters)
+      icp_max_iters="$2"
+      shift 2
+      ;;
+    --scale-show-viz)
+      scale_show_viz=1
+      shift 1
+      ;;
+    --scale-viz-method)
+      scale_viz_method="$2"
+      shift 2
+      ;;
     --cam-k)
       cam_k_path="$2"
       shift 2
@@ -228,6 +264,7 @@ mask_dir="${output_root}/sam2_masks"
 sam3d_out_dir="${output_root}/sam3d"
 moge_out_dir="${output_root}/moge_scale"
 real_out_dir="${output_root}/real_scale"
+scale_out_dir="${output_root}/sam3d_scale"
 
 mkdir -p "${output_root}"
 echo "Output root: ${output_root}"
@@ -242,7 +279,7 @@ conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
   --image "${image_path}" \
   --output-dir "${mask_dir}"
 
-mkdir -p "${sam3d_out_dir}" "${moge_out_dir}"
+mkdir -p "${sam3d_out_dir}" "${moge_out_dir}" "${scale_out_dir}"
 if [[ -n "${depth_image_path}" ]]; then
   mkdir -p "${real_out_dir}"
 fi
@@ -270,8 +307,8 @@ for mask_path in "${masks[@]}"; do
   real_npz=""
   real_json=""
   real_ply=""
-  # scale_txt="${scale_out_dir}/${mask_stem}_scale.txt"
-  # scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
+  scale_txt="${scale_out_dir}/${mask_stem}_scale.txt"
+  scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
 
   # 2) MoGe 실행(마스크 영역 metric depth/points)
   conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
@@ -571,6 +608,16 @@ PY
     compile_flag="--compile"
   fi
 
+  sam3d_pointmap_flags=()
+  if [[ -n "${depth_image_path}" && -n "${cam_k_path}" ]]; then
+    sam3d_pointmap_flags+=(
+      "--pointmap-from-depth"
+      "--depth-image" "${depth_image_path}"
+      "--cam-k" "${cam_k_path}"
+      "--depth-scale" "${depth_scale}"
+    )
+  fi
+
   conda run -n "${sam3d_env}" python "${repo_root}/src/sam3d_export.py" \
     --image "${image_path}" \
     --mask "${mask_path}" \
@@ -578,46 +625,10 @@ PY
     --output "${output_path}" \
     --seed "${sam3d_seed}" \
     --pose-rot-transpose \
+    "${sam3d_pointmap_flags[@]}" \
     ${compile_flag}
 
-  # 4) 스케일 추정(TEASER++ 기본 설정)
-  # depth_image가 있으면 real_depth 기반 NPZ를 사용
-  scale_npz="${moge_npz}"
-  if [[ -n "${depth_image_path}" && -n "${real_npz}" ]]; then
-    scale_npz="${real_npz}"
-  fi
-  if [[ ! -f "${scale_npz}" ]]; then
-    echo "Scale NPZ missing: ${scale_npz}. Falling back to MoGe NPZ."
-    scale_npz="${moge_npz}"
-  fi
-  if [[ ! -f "${scale_npz}" ]]; then
-    echo "Missing MoGe npz: ${scale_npz}"
-    exit 1
-  fi
-
-  # conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \
-  #   --sam3d-ply "${output_path}" \
-  #   --moge-npz "${scale_npz}" \
-  #   --algo teaserpp \
-  #   --output-dir "${scale_out_dir}" \
-  #   --output-scale "${scale_txt}" \
-  #   --output-scaled-ply "${scaled_ply}" \
-  #   $( [[ ${teaser_estimate_scaling} -eq 1 ]] && echo "--teaser-estimate-scaling" ) \
-  #   --teaser-noise-bound "${teaser_noise_bound}" \
-  #   --teaser-nn-max-points "${teaser_nn_max_points}" \
-  #   --teaser-max-correspondences "${teaser_max_correspondences}" \
-  #   --teaser-gnc-factor "${teaser_gnc_factor}" \
-  #   --teaser-rot-max-iters "${teaser_rot_max_iters}" \
-  #   --teaser-cbar2 "${teaser_cbar2}" \
-  #   --teaser-iterations "${teaser_iterations}" \
-  #   --teaser-correspondence "${teaser_correspondence}" \
-  #   --teaser-fpfh-voxel "${teaser_fpfh_voxel}" \
-  #   --teaser-fpfh-normal-radius "${teaser_fpfh_normal_radius}" \
-  #   --teaser-fpfh-feature-radius "${teaser_fpfh_feature_radius}" \
-  #   $( [[ ${teaser_icp_refine} -eq 1 ]] && echo "--teaser-icp-refine" ) \
-  #   --teaser-icp-max-iters "${teaser_icp_max_iters}" \
-  #   --teaser-icp-distance "${teaser_icp_distance}" \
-  #   $( [[ ${teaser_show_viz} -eq 1 ]] && echo "--show-viz" ) \
-  #   --viz-method "${teaser_viz_method}"
+  # 4) 스케일 정합 단계는 본 실험에서 제외
+  echo "Skipping sam3d_scale (scale matching disabled for pointmap-depth experiment)."
 
 done
