@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,129 @@ from sam3d_scale_utils import (
     visualize_alignment_open3d,
     write_scaled_ply,
 )
+
+
+def strip_pose_suffix(stem: str) -> str:
+    if stem.endswith("_pose"):
+        return stem[: -len("_pose")]
+    return stem
+
+
+def load_pose_payload(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def parse_pose_payload(payload: dict | None) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    if not payload:
+        return None, None, None
+    rot = payload.get("rotation_matrix")
+    if rot is None:
+        rot = payload.get("rotation")
+        if isinstance(rot, dict):
+            rot = rot.get("value")
+    trans = payload.get("translation")
+    scale = payload.get("scale")
+    rot_mat = np.asarray(rot, dtype=np.float32).reshape(3, 3) if rot is not None else None
+    trans_vec = np.asarray(trans, dtype=np.float32).reshape(3) if trans is not None else None
+    if scale is None:
+        scale_vec = None
+    else:
+        scale_arr = np.asarray(scale, dtype=np.float32).reshape(-1)
+        if scale_arr.size == 1:
+            scale_vec = np.repeat(scale_arr[0], 3)
+        else:
+            scale_vec = scale_arr[:3]
+    return rot_mat, trans_vec, scale_vec
+
+
+def apply_pose(points: np.ndarray, scale: np.ndarray, rot: np.ndarray, trans: np.ndarray) -> np.ndarray:
+    scaled = points * scale.reshape(1, 3)
+    rotated = (rot @ scaled.T).T
+    return rotated + trans.reshape(1, 3)
+
+
+def write_pose_ply(ply, points: np.ndarray, out_path: Path, scale_vec: np.ndarray) -> None:
+    from plyfile import PlyData, PlyElement
+
+    vertex = ply["vertex"].data.copy()
+    vertex["x"] = points[:, 0]
+    vertex["y"] = points[:, 1]
+    vertex["z"] = points[:, 2]
+    names = vertex.dtype.names or ()
+    if all(name in names for name in ("scale_0", "scale_1", "scale_2")):
+        safe_scale = np.maximum(np.abs(scale_vec), 1e-12).astype(np.float32)
+        scale_vals = vertex["scale_0"].astype(np.float32)
+        scale_median = float(np.median(scale_vals))
+        if scale_median < 0:
+            log_scale = np.log(safe_scale)
+            vertex["scale_0"] += log_scale[0]
+            vertex["scale_1"] += log_scale[1]
+            vertex["scale_2"] += log_scale[2]
+        else:
+            vertex["scale_0"] *= safe_scale[0]
+            vertex["scale_1"] *= safe_scale[1]
+            vertex["scale_2"] *= safe_scale[2]
+
+    elements = []
+    for element in ply.elements:
+        if element.name == "vertex":
+            elements.append(PlyElement.describe(vertex, "vertex"))
+        else:
+            elements.append(element)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    PlyData(
+        elements,
+        text=ply.text,
+        comments=ply.comments,
+        obj_info=ply.obj_info,
+    ).write(str(out_path))
+
+
+def load_mesh(path: Path):
+    try:
+        import trimesh
+    except Exception:
+        return None
+    if not path.exists():
+        return None
+    mesh = trimesh.load(path, force="mesh")
+    if isinstance(mesh, trimesh.Scene):
+        if not mesh.geometry:
+            return None
+        mesh = trimesh.util.concatenate(tuple(mesh.dump()))
+    return mesh
+
+
+def save_transformed_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray, rot: np.ndarray, trans: np.ndarray) -> None:
+    mesh = load_mesh(src_path)
+    if mesh is None:
+        return
+    transform = np.eye(4, dtype=np.float32)
+    transform[:3, :3] = rot @ np.diag(scale_vec.astype(np.float32))
+    transform[:3, 3] = trans.astype(np.float32)
+    mesh_t = mesh.copy()
+    mesh_t.apply_transform(transform)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    mesh_t.export(out_path)
+
+
+def save_scaled_mesh(src_path: Path, out_path: Path, scale: float) -> None:
+    mesh = load_mesh(src_path)
+    if mesh is None:
+        return
+    transform = np.eye(4, dtype=np.float32)
+    transform[:3, :3] = np.eye(3, dtype=np.float32) * float(scale)
+    mesh_t = mesh.copy()
+    mesh_t.apply_transform(transform)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    mesh_t.export(out_path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -209,11 +333,19 @@ def main() -> int:
         return 1
 
     try:
-        ply, sam_points = load_ply_points(sam3d_ply)
+        pose_ply, sam_points = load_ply_points(sam3d_ply)
     except RuntimeError as exc:
         print(exc)
         print("Install with: conda run -n sam3d-objects python -m pip install plyfile")
         return 1
+
+    sam3d_dir = sam3d_ply.parent
+    base_stem = strip_pose_suffix(sam3d_ply.stem)
+    raw_ply_path = sam3d_dir / f"{base_stem}.ply"
+    if raw_ply_path.exists():
+        raw_ply, raw_points = load_ply_points(raw_ply_path)
+    else:
+        raw_ply, raw_points = pose_ply, sam_points
 
     moge_points = load_moge_points(moge_npz)
     if moge_points is None or moge_points.size == 0:
@@ -236,7 +368,7 @@ def main() -> int:
     output_dir = resolve_path(output_dir, Path.cwd())
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = sam3d_ply.stem
+    stem = base_stem
     viz_src = sam_points
     viz_scale = None
     if args.mode == "scale_only":
@@ -323,7 +455,57 @@ def main() -> int:
         scaled_path = resolve_path(args.output_scaled_ply, Path.cwd())
     else:
         scaled_path = output_dir / f"{stem}_scaled.ply"
-    write_scaled_ply(ply, sam_points * scale, scaled_path, scale)
+    write_scaled_ply(raw_ply, raw_points * scale, scaled_path, scale)
+
+    for ext in ("glb", "ply", "obj"):
+        src_mesh = sam3d_dir / f"{stem}_mesh.{ext}"
+        if src_mesh.exists():
+            scaled_mesh = output_dir / f"{stem}_scaled_mesh.{ext}"
+            save_scaled_mesh(src_mesh, scaled_mesh, scale)
+
+    pose_payload = None
+    pose_path_candidates = [
+        output_dir / f"{stem}_pose.json",
+        sam3d_dir / f"{stem}_pose.json",
+    ]
+    for candidate in pose_path_candidates:
+        pose_payload = load_pose_payload(candidate)
+        if pose_payload is not None:
+            break
+    pose_r, pose_t, pose_s = parse_pose_payload(pose_payload)
+    if pose_r is not None and pose_t is not None and pose_s is not None:
+        scale_vec = pose_s * scale
+        if args.fine_registration and r is not None and t is not None:
+            r_total = r @ pose_r
+            t_total = r @ pose_t + t
+        else:
+            r_total = pose_r
+            t_total = pose_t
+
+        pose_out = {
+            "rotation_matrix": r_total.tolist(),
+            "translation": t_total.tolist(),
+            "scale": scale_vec.tolist(),
+            "base_rotation_matrix": pose_r.tolist(),
+            "base_translation": pose_t.tolist(),
+            "base_scale": pose_s.tolist(),
+            "fine_registration": bool(args.fine_registration),
+        }
+        pose_json = output_dir / f"{stem}_pose.json"
+        with pose_json.open("w", encoding="utf-8") as f:
+            json.dump(pose_out, f, indent=2)
+
+        pose_points = apply_pose(raw_points, scale_vec, r_total, t_total)
+        pose_ply = output_dir / f"{stem}_pose.ply"
+        write_pose_ply(raw_ply, pose_points, pose_ply, scale_vec)
+
+        for ext in ("glb", "ply", "obj"):
+            src_mesh = sam3d_dir / f"{stem}_mesh.{ext}"
+            if src_mesh.exists():
+                pose_mesh = output_dir / f"{stem}_pose_mesh.{ext}"
+                save_transformed_mesh(src_mesh, pose_mesh, scale_vec, r_total, t_total)
+    else:
+        print("Pose metadata missing; skipping pose-applied outputs.")
 
     if viz_scale is None:
         viz_scale = scale

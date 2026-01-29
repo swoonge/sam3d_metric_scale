@@ -46,6 +46,7 @@ moge_model="Ruicheng/moge-2-vitl-normal"
 scale_method="bbox_diag"
 min_pixels=100
 cam_k_path="/home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_box/cam_K.txt"
+run_moge=0
 
 # Scale matching options
 scale_algo="teaserpp"
@@ -102,6 +103,7 @@ Options:
   --sam3d-seed INT          Seed for SAM3D inference
   --sam3d-compile           Enable compile flag for SAM3D
   --moge-env NAME           Conda env for MoGe (default: moge)
+  --run-moge                Run MoGe depth inference (default: off)
   --moge-model NAME         HF model id or local path
   --scale-method NAME       bbox_diag | bbox_max (default: bbox_diag)
   --min-pixels INT          Minimum valid pixels for scale
@@ -188,6 +190,10 @@ while [[ $# -gt 0 ]]; do
     --moge-env)
       moge_env="$2"
       shift 2
+      ;;
+    --run-moge)
+      run_moge=1
+      shift
       ;;
     --moge-model)
       moge_model="$2"
@@ -279,7 +285,10 @@ conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
   --image "${image_path}" \
   --output-dir "${mask_dir}"
 
-mkdir -p "${sam3d_out_dir}" "${moge_out_dir}" "${scale_out_dir}"
+mkdir -p "${sam3d_out_dir}" "${scale_out_dir}"
+if [[ ${run_moge} -eq 1 ]]; then
+  mkdir -p "${moge_out_dir}"
+fi
 if [[ -n "${depth_image_path}" ]]; then
   mkdir -p "${real_out_dir}"
 fi
@@ -311,24 +320,28 @@ for mask_path in "${masks[@]}"; do
   scaled_ply="${scale_out_dir}/${mask_stem}_scaled.ply"
 
   # 2) MoGe 실행(마스크 영역 metric depth/points)
-  conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
-    --image "${image_path}" \
-    --mask "${mask_path}" \
-    --model "${moge_model}" \
-    --output-dir "${moge_out_dir}" \
-    --scale-method "${scale_method}" \
-    --min-pixels "${min_pixels}"
-
-  if [[ -n "${cam_k_path}" ]]; then
+  if [[ ${run_moge} -eq 1 ]]; then
     conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
       --image "${image_path}" \
       --mask "${mask_path}" \
       --model "${moge_model}" \
       --output-dir "${moge_out_dir}" \
       --scale-method "${scale_method}" \
-      --min-pixels "${min_pixels}" \
-      --cam-k "${cam_k_path}" \
-      --output-suffix "camk"
+      --min-pixels "${min_pixels}"
+
+    if [[ -n "${cam_k_path}" ]]; then
+      conda run -n "${moge_env}" python "${repo_root}/src/moge_scale.py" \
+        --image "${image_path}" \
+        --mask "${mask_path}" \
+        --model "${moge_model}" \
+        --output-dir "${moge_out_dir}" \
+        --scale-method "${scale_method}" \
+        --min-pixels "${min_pixels}" \
+        --cam-k "${cam_k_path}" \
+        --output-suffix "camk"
+    fi
+  else
+    echo "Skipping MoGe (use --run-moge to enable)."
   fi
 
   # 2-1) Real depth 기반 outputs (옵션)
@@ -623,12 +636,61 @@ PY
     --mask "${mask_path}" \
     --sam3d-config "${sam3d_config}" \
     --output "${output_path}" \
+    --pose-output-dir "${scale_out_dir}" \
     --seed "${sam3d_seed}" \
     --pose-rot-transpose \
     "${sam3d_pointmap_flags[@]}" \
     ${compile_flag}
 
-  # 4) 스케일 정합 단계는 본 실험에서 제외
-  echo "Skipping sam3d_scale (scale matching disabled for pointmap-depth experiment)."
+  # 4) 스케일 정합 (real depth 우선, 없으면 MoGe)
+  target_npz=""
+  if [[ -n "${real_npz}" && -f "${real_npz}" ]]; then
+    target_npz="${real_npz}"
+  elif [[ ${run_moge} -eq 1 && -f "${moge_npz}" ]]; then
+    target_npz="${moge_npz}"
+  fi
+
+  if [[ -n "${target_npz}" ]]; then
+    sam3d_pose_ply="${scale_out_dir}/${mask_stem}_pose.ply"
+    if [[ ! -f "${sam3d_pose_ply}" ]]; then
+      sam3d_pose_ply="${sam3d_out_dir}/${mask_stem}_pose.ply"
+    fi
+
+    scale_flags=()
+    if [[ ${fine_registration} -eq 1 ]]; then
+      scale_flags+=("--fine-registration")
+    fi
+    if [[ ${scale_show_viz} -eq 1 ]]; then
+      scale_flags+=("--show-viz" "--viz-method" "${scale_viz_method}")
+    fi
+
+    conda run -n "${scale_env}" python "${repo_root}/src/sam3d_scale.py" \
+      --sam3d-ply "${sam3d_pose_ply}" \
+      --moge-npz "${target_npz}" \
+      --algo "${scale_algo}" \
+      --output-dir "${scale_out_dir}" \
+      --output-scale "${scale_txt}" \
+      --output-scaled-ply "${scaled_ply}" \
+      --icp-max-iters "${icp_max_iters}" \
+      --scale-mode "${scale_mode}" \
+      --teaser-estimate-scaling \
+      --teaser-noise-bound "${teaser_noise_bound}" \
+      --teaser-nn-max-points "${teaser_nn_max_points}" \
+      --teaser-max-correspondences "${teaser_max_correspondences}" \
+      --teaser-gnc-factor "${teaser_gnc_factor}" \
+      --teaser-rot-max-iters "${teaser_rot_max_iters}" \
+      --teaser-cbar2 "${teaser_cbar2}" \
+      --teaser-iterations "${teaser_iterations}" \
+      --teaser-correspondence "${teaser_correspondence}" \
+      --teaser-fpfh-voxel "${teaser_fpfh_voxel}" \
+      --teaser-fpfh-normal-radius "${teaser_fpfh_normal_radius}" \
+      --teaser-fpfh-feature-radius "${teaser_fpfh_feature_radius}" \
+      --teaser-icp-refine \
+      --teaser-icp-max-iters "${teaser_icp_max_iters}" \
+      --teaser-icp-distance "${teaser_icp_distance}" \
+      "${scale_flags[@]}"
+  else
+    echo "Skipping sam3d_scale (no target point cloud)."
+  fi
 
 done

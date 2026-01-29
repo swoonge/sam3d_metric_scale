@@ -657,13 +657,18 @@ def main() -> int:
     output["gs"].save_ply(str(output_path))
     print(f"SAM3D saved: {output_path}")
 
+    pose_output_dir = output_path.parent
+    if args.pose_output_dir is not None:
+        pose_output_dir = resolve_path(args.pose_output_dir, Path.cwd())
+    pose_output_dir.mkdir(parents=True, exist_ok=True)
+
     if pose_rot_mat is not None and pose_scale_vec is not None and pose_trans_vec is not None:
         # pose가 P3D frame 기준으로 예측되었다면 camera frame으로 역변환한다.
         # (pointmap 저장 시 적용한 P3D->camera 변환과 동일한 회전)
         if cam_from_p3d_rot is not None:
             pose_rot_mat = cam_from_p3d_rot @ pose_rot_mat
             pose_trans_vec = (cam_from_p3d_rot @ pose_trans_vec.reshape(3, 1)).reshape(3)
-        pose_json = output_path.with_name(f"{output_path.stem}_pose.json")
+        pose_json = pose_output_dir / f"{output_path.stem}_pose.json"
         pose_payload = {
             "rotation": pose_rot_meta,
             "translation": pose_trans_vec.tolist(),
@@ -676,7 +681,7 @@ def main() -> int:
             json.dump(pose_payload, f, indent=2)
         print(f"SAM3D pose saved: {pose_json}")
 
-        pose_ply = output_path.with_name(f"{output_path.stem}_pose.ply")
+        pose_ply = pose_output_dir / f"{output_path.stem}_pose.ply"
         save_pose_transformed_gaussian(
             output_path, pose_ply, pose_scale_vec, pose_rot_mat, pose_trans_vec
         )
@@ -707,15 +712,15 @@ def main() -> int:
                 if pose_rot_mat is not None and pose_scale_vec is not None and pose_trans_vec is not None:
                     pose_mesh_source = mesh_raw if mesh_raw is not None else mesh
                     if args.mesh_format in ("glb", "both", "all"):
-                        mesh_path = output_path.with_name(f"{output_path.stem}_pose_mesh.glb")
+                        mesh_path = pose_output_dir / f"{output_path.stem}_pose_mesh.glb"
                         save_pose_transformed_mesh(pose_mesh_source, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
                         print(f"SAM3D pose mesh saved: {mesh_path}")
                     if args.mesh_format in ("ply", "both", "all"):
-                        mesh_path = output_path.with_name(f"{output_path.stem}_pose_mesh.ply")
+                        mesh_path = pose_output_dir / f"{output_path.stem}_pose_mesh.ply"
                         save_pose_transformed_mesh(pose_mesh_source, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
                         print(f"SAM3D pose mesh saved: {mesh_path}")
                     if args.mesh_format in ("obj", "all"):
-                        mesh_path = output_path.with_name(f"{output_path.stem}_pose_mesh.obj")
+                        mesh_path = pose_output_dir / f"{output_path.stem}_pose_mesh.obj"
                         save_pose_transformed_mesh(pose_mesh_source, mesh_path, pose_scale_vec, pose_rot_mat, pose_trans_vec)
                         print(f"SAM3D pose mesh saved: {mesh_path}")
             except Exception as exc:
