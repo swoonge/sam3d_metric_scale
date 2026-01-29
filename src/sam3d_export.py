@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sam3d-config", type=Path, default=default_config)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=default_output_dir)
+    parser.add_argument(
+        "--pose-output-dir",
+        type=Path,
+        default=None,
+        help="Directory to write pose-applied outputs (default: same as --output).",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--depth-image", type=Path, default=None)
