@@ -578,10 +578,10 @@ def main() -> int:
                 interpolation=cv2.INTER_NEAREST,
             )
         pointmap = depth_to_pointmap(depth, cam_k)
-        if args.pointmap_mask:
-            mask_bool = mask.astype(bool)
-            pointmap = pointmap.copy()
-            pointmap[~mask_bool] = 0.0
+        # if args.pointmap_mask:
+        #     mask_bool = mask.astype(bool)
+        #     pointmap = pointmap.copy()
+        #     pointmap[~mask_bool] = 0.0
 
         try:
             from sam3d_objects.pipeline.inference_pipeline_pointmap import (
