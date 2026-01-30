@@ -19,6 +19,12 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 - `outputs/`: 결과 저장(자동 생성, gitignored)
 - 외부 레포(로컬 의존, gitignored): `sam2/`, `sam-3d-objects/`, `MoGe/`, (옵션) `TEASER-plusplus/`
 
+## 외부 레포 링크
+- SAM2: https://github.com/facebookresearch/sam2
+- SAM3D Objects: https://github.com/facebookresearch/sam-3d-objects
+- MoGe: https://github.com/microsoft/MoGe
+- TEASER++ (옵션): https://github.com/MIT-SPARK/TEASER-plusplus
+
 ## 출력 구조
 - 기본 루트: `outputs/<image_stem>[_###]/`
   - `sam2_masks/`: SAM2 마스크
@@ -41,9 +47,9 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 
 ### 1) 외부 레포 배치
 ```bash
-git clone <SAM2_REPO_URL> sam2
-git clone <SAM3D_OBJECTS_REPO_URL> sam-3d-objects
-git clone <MOGE_REPO_URL> MoGe
+git clone https://github.com/facebookresearch/sam2.git sam2
+git clone https://github.com/facebookresearch/sam-3d-objects.git sam-3d-objects
+git clone https://github.com/microsoft/MoGe.git MoGe
 ```
 
 ### 2) SAM2 환경
@@ -106,12 +112,40 @@ PY
 
 ## 사용법
 
-### 1) 전체 파이프라인 실행
+### 1) 전체 파이프라인 실행 (기본)
 ```bash
 ./run_full_pipeline.sh \
   --image /path/to/rgb.png \
+  --depth-image /path/to/depth.png \
+  --cam-k /path/to/cam_K.txt \
   --output-base outputs/demo
 ```
+필요 시 depth 스케일 추가:
+```bash
+./run_full_pipeline.sh \
+  --image /path/to/rgb.png \
+  --depth-image /path/to/depth.png \
+  --cam-k /path/to/cam_K.txt \
+  --depth-scale 0.001 \
+  --output-base outputs/demo
+```
+MoGe(옵션) 활성화:
+```bash
+./run_full_pipeline.sh \
+  --image /path/to/rgb.png \
+  --run-moge \
+  --output-base outputs/demo
+```
+
+자주 쓰는 옵션 요약:
+- `--image`: 입력 RGB 이미지
+- `--depth-image`: real depth 이미지(있으면 real_scale 생성)
+- `--cam-k`: 3x3 intrinsics 텍스트 파일
+- `--depth-scale`: depth 스케일 (예: mm → m이면 0.001)
+- `--output-base`: 결과 저장 루트
+- `--run-moge`: MoGe 실행(기본 off)
+- `--scale-algo`: `icp` | `teaserpp` (기본: `icp`)
+- `--fine-registration`: 스케일 후 추가 정합(TEASER++ 사용 시)
 
 ### 2) 스케일 알고리즘 단독 실행
 ```bash
