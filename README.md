@@ -30,9 +30,10 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
   - `sam2_masks/`: SAM2 마스크
   - `moge_scale/`: MoGe 스케일 결과(JSON/NPZ/PLY)
   - `sam3d/`: SAM3D 결과(Ply)
-  - `sam3d_scale/`: 스케일 값(txt) + 스케일 적용 PLY(선택 실행)
+  - `sam3d_scale/`: 스케일 값(txt) + 스케일 적용 PLY + 스케일 메시 + 디케메이트 메시
 - 동일 이름 폴더가 있으면 `_001`, `_002`처럼 번호가 붙습니다.
 - 원본 이미지는 출력 루트에 복사됩니다.
+- 메시 디케메이트 결과는 `*_scaled_mesh_decimated.{glb|ply|obj}`로 저장됩니다.
 
 ## 사전 준비
 - Conda env: `sam2`, `sam3d-objects`, `moge` (옵션), `teaserpp` (TEASER++ 사용 시에만 필요)
@@ -118,6 +119,7 @@ PY
   --image /path/to/rgb.png \
   --depth-image /path/to/depth.png \
   --cam-k /path/to/cam_K.txt \
+  --mesh-decimate-ratio 0.2 \
   --output-base outputs/demo
 ```
 필요 시 depth 스케일 추가:
@@ -137,6 +139,23 @@ MoGe(옵션) 활성화:
   --output-base outputs/demo
 ```
 
+목표 face 수로 직접 지정:
+```bash
+./run_full_pipeline.sh \
+  --image /path/to/rgb.png \
+  --run-moge \
+  --mesh-target-faces 200000 \
+  --output-base outputs/demo
+```
+
+비활성화:
+```bash
+./run_full_pipeline.sh \
+  --image /path/to/rgb.png \
+  --no-mesh-decimate \
+  --output-base outputs/demo
+```
+
 자주 쓰는 옵션 요약:
 - `--image`: 입력 RGB 이미지
 - `--depth-image`: real depth 이미지(있으면 real_scale 생성)
@@ -146,6 +165,9 @@ MoGe(옵션) 활성화:
 - `--run-moge`: MoGe 실행(기본 off)
 - `--scale-algo`: `icp` | `teaserpp` (기본: `icp`)
 - `--fine-registration`: 스케일 후 추가 정합(TEASER++ 사용 시)
+- `--mesh-decimate-ratio`: 스케일 보정된 메시의 face 비율 (기본: 0.2)
+- `--mesh-target-faces`: 목표 face 수 (비율 대신 사용)
+- `--no-mesh-decimate`: 메시 밀도 조정 비활성화
 
 ### 2) 스케일 알고리즘 단독 실행
 ```bash
@@ -162,6 +184,16 @@ conda run -n teaserpp python src/sam3d_scale.py \
   --algo teaserpp \
   --teaser-estimate-scaling
 ```
+
+### 3) 메시 밀도 조정 단독 실행
+```bash
+conda run -n sam3d-objects python src/mesh_decimate.py \
+  --input /path/to/sam3d_scale/my_obj_scaled_mesh.ply \
+  --ratio 0.2
+```
+옵션 예시:
+- `--target-faces 200000`: 목표 face 수 지정
+- `--method open3d`: open3d quadric decimation 강제
 
 ## 스케일 추정 방식
 - `sam3d_scale.py`에서 알고리즘을 선택해 실험합니다.

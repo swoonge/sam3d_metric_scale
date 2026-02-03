@@ -80,6 +80,13 @@ teaser_icp_distance=0
 teaser_estimate_scaling=1
 process_all=1
 
+# Mesh decimation options (scaled mesh size reduction)
+mesh_decimate=1
+mesh_decimate_ratio=0.2
+mesh_target_faces=0
+mesh_decimate_method="auto"
+mesh_decimate_min_faces=200
+
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [options]
@@ -107,6 +114,12 @@ Options:
   --fine-registration       After scale-only, run TEASER++ (no scale) once for R/t refine
   --icp-max-iters INT       ICP max iterations (default: 1)
   --cam-k PATH              Camera intrinsics (3x3) for real depth backprojection
+  --mesh-decimate           Enable mesh decimation after scaling (default: on)
+  --no-mesh-decimate        Disable mesh decimation
+  --mesh-decimate-ratio VAL Target face ratio (0<r<=1, default: 0.2)
+  --mesh-target-faces INT   Target number of faces (overrides ratio)
+  --mesh-decimate-method M  auto | open3d | trimesh | cluster (default: auto)
+  --mesh-min-faces INT      Minimum faces to keep (default: 200)
   -h, --help                Show this help
 USAGE
 }
@@ -223,6 +236,30 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cam-k)
       cam_k_path="$2"
+      shift 2
+      ;;
+    --mesh-decimate)
+      mesh_decimate=1
+      shift
+      ;;
+    --no-mesh-decimate)
+      mesh_decimate=0
+      shift
+      ;;
+    --mesh-decimate-ratio)
+      mesh_decimate_ratio="$2"
+      shift 2
+      ;;
+    --mesh-target-faces)
+      mesh_target_faces="$2"
+      shift 2
+      ;;
+    --mesh-decimate-method)
+      mesh_decimate_method="$2"
+      shift 2
+      ;;
+    --mesh-min-faces)
+      mesh_decimate_min_faces="$2"
       shift 2
       ;;
     -h|--help)
@@ -689,6 +726,42 @@ PY
       --teaser-icp-max-iters "${teaser_icp_max_iters}" \
       --teaser-icp-distance "${teaser_icp_distance}" \
       "${scale_flags[@]}"
+
+    if [[ ${mesh_decimate} -eq 1 ]]; then
+      mesh_inputs=()
+      for ext in glb ply obj; do
+        mesh_path="${scale_out_dir}/${mask_stem}_scaled_mesh.${ext}"
+        if [[ -f "${mesh_path}" ]]; then
+          mesh_inputs+=("${mesh_path}")
+        fi
+      done
+
+      if [[ ${#mesh_inputs[@]} -eq 0 ]]; then
+        echo "No scaled mesh found for decimation: ${scale_out_dir}/${mask_stem}_scaled_mesh.*"
+      else
+        for mesh_path in "${mesh_inputs[@]}"; do
+          mesh_name="$(basename "${mesh_path}")"
+          mesh_ext="${mesh_name##*.}"
+          mesh_base="${mesh_name%.*}"
+          decimated_path="${scale_out_dir}/${mesh_base}_decimated.${mesh_ext}"
+
+          decimate_args=(
+            --input "${mesh_path}"
+            --output "${decimated_path}"
+            --ratio "${mesh_decimate_ratio}"
+            --method "${mesh_decimate_method}"
+            --min-faces "${mesh_decimate_min_faces}"
+          )
+          if [[ ${mesh_target_faces} -gt 0 ]]; then
+            decimate_args+=(--target-faces "${mesh_target_faces}")
+          fi
+
+          if ! conda run -n "${scale_env}" python "${repo_root}/src/mesh_decimate.py" "${decimate_args[@]}"; then
+            echo "Mesh decimation failed: ${mesh_path}"
+          fi
+        done
+      fi
+    fi
   else
     echo "Skipping sam3d_scale (no target point cloud)."
   fi
