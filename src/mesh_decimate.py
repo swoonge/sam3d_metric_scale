@@ -25,13 +25,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ratio",
         type=float,
-        default=0.2,
+        default=0.02,
         help="Target face ratio in (0, 1]. Ignored if --target-faces is set.",
     )
     parser.add_argument(
         "--target-faces",
         type=int,
-        default=0,
+        default=20000,
         help="Target number of faces (overrides --ratio).",
     )
     parser.add_argument(

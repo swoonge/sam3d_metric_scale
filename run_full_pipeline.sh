@@ -82,8 +82,8 @@ process_all=1
 
 # Mesh decimation options (scaled mesh size reduction)
 mesh_decimate=1
-mesh_decimate_ratio=0.2
-mesh_target_faces=0
+mesh_decimate_ratio=0.02
+mesh_target_faces=20000
 mesh_decimate_method="auto"
 mesh_decimate_min_faces=200
 
@@ -116,8 +116,8 @@ Options:
   --cam-k PATH              Camera intrinsics (3x3) for real depth backprojection
   --mesh-decimate           Enable mesh decimation after scaling (default: on)
   --no-mesh-decimate        Disable mesh decimation
-  --mesh-decimate-ratio VAL Target face ratio (0<r<=1, default: 0.2)
-  --mesh-target-faces INT   Target number of faces (overrides ratio)
+  --mesh-decimate-ratio VAL Target face ratio (0<r<=1, default: 0.02)
+  --mesh-target-faces INT   Target number of faces (overrides ratio, default: 20000)
   --mesh-decimate-method M  auto | open3d | trimesh | cluster (default: auto)
   --mesh-min-faces INT      Minimum faces to keep (default: 200)
   -h, --help                Show this help

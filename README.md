@@ -119,7 +119,7 @@ PY
   --image /path/to/rgb.png \
   --depth-image /path/to/depth.png \
   --cam-k /path/to/cam_K.txt \
-  --mesh-decimate-ratio 0.2 \
+  --mesh-target-faces 20000 \
   --output-base outputs/demo
 ```
 필요 시 depth 스케일 추가:
@@ -165,8 +165,8 @@ MoGe(옵션) 활성화:
 - `--run-moge`: MoGe 실행(기본 off)
 - `--scale-algo`: `icp` | `teaserpp` (기본: `icp`)
 - `--fine-registration`: 스케일 후 추가 정합(TEASER++ 사용 시)
-- `--mesh-decimate-ratio`: 스케일 보정된 메시의 face 비율 (기본: 0.2)
-- `--mesh-target-faces`: 목표 face 수 (비율 대신 사용)
+- `--mesh-decimate-ratio`: 스케일 보정된 메시의 face 비율 (기본: 0.02)
+- `--mesh-target-faces`: 목표 face 수 (비율 대신 사용, 기본: 20000)
 - `--no-mesh-decimate`: 메시 밀도 조정 비활성화
 
 ### 2) 스케일 알고리즘 단독 실행
@@ -189,7 +189,7 @@ conda run -n teaserpp python src/sam3d_scale.py \
 ```bash
 conda run -n sam3d-objects python src/mesh_decimate.py \
   --input /path/to/sam3d_scale/my_obj_scaled_mesh.ply \
-  --ratio 0.2
+  --target-faces 20000
 ```
 옵션 예시:
 - `--target-faces 200000`: 목표 face 수 지정
