@@ -10,6 +10,11 @@ import cv2
 import numpy as np
 
 from camera_intrinsics import load_intrinsics_tuple
+from geometry_depth_utils import (
+    backproject_depth,
+    build_filter_keep_mask,
+    save_points_ply,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,53 +38,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def mad_keep_mask(values: np.ndarray, thresh: float) -> np.ndarray:
-    if thresh <= 0:
-        return np.ones(values.shape[0], dtype=bool)
-    median = np.median(values)
-    mad = np.median(np.abs(values - median))
-    if mad < 1e-8:
-        return np.ones(values.shape[0], dtype=bool)
-    z_score = 0.6745 * (values - median) / mad
-    return np.abs(z_score) <= thresh
-
-
-def build_filter_keep_mask(
-    points: np.ndarray,
-    ys: np.ndarray,
-    xs: np.ndarray,
-    shape: tuple[int, int],
-    border_margin: int,
-    depth_mad: float,
-    radius_mad: float,
-) -> np.ndarray:
-    keep = np.ones(points.shape[0], dtype=bool)
-    if border_margin > 0 and ys.shape[0] == points.shape[0]:
-        height, width = shape
-        keep &= (
-            (ys >= border_margin)
-            & (ys < height - border_margin)
-            & (xs >= border_margin)
-            & (xs < width - border_margin)
-        )
-    filtered = points[keep]
-    if filtered.size == 0:
-        return np.zeros(points.shape[0], dtype=bool)
-    if depth_mad > 0 or radius_mad > 0:
-        sub_keep = np.ones(filtered.shape[0], dtype=bool)
-        if depth_mad > 0:
-            sub_keep &= mad_keep_mask(filtered[:, 2], depth_mad)
-        if radius_mad > 0:
-            center = np.median(filtered, axis=0)
-            radius = np.linalg.norm(filtered - center, axis=1)
-            sub_keep &= mad_keep_mask(radius, radius_mad)
-        indices = np.where(keep)[0]
-        keep_final = np.zeros(points.shape[0], dtype=bool)
-        keep_final[indices[sub_keep]] = True
-        return keep_final
-    return keep
-
-
 def compute_scale(points_np: np.ndarray) -> dict:
     mins = points_np.min(axis=0)
     maxs = points_np.max(axis=0)
@@ -94,21 +52,6 @@ def compute_scale(points_np: np.ndarray) -> dict:
         "bbox_max_dim": max_dim,
         "scale_method": "bbox_diag",
     }
-
-
-def save_points_ply(points: np.ndarray, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {points.shape[0]}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("end_header\n")
-        for px, py, pz in points:
-            f.write(f"{px} {py} {pz}\n")
-
 
 def main() -> int:
     args = parse_args()
@@ -187,18 +130,11 @@ def main() -> int:
         cx = (width - 1) / 2.0
         cy = (height - 1) / 2.0
 
-    z = depth_masked
-    x = (xs - cx) * z / fx
-    y = (ys - cy) * z / fy
-    points = np.stack([x, y, z], axis=1).astype(np.float32)
+    points = backproject_depth(depth, valid, fx, fy, cx, cy)
     points_count_raw = int(points.shape[0])
 
     valid_full = np.isfinite(depth) & (depth > 0)
-    ys_full, xs_full = np.where(valid_full)
-    z_full = depth[valid_full]
-    x_full = (xs_full - cx) * z_full / fx
-    y_full = (ys_full - cy) * z_full / fy
-    points_full = np.stack([x_full, y_full, z_full], axis=1).astype(np.float32)
+    points_full = backproject_depth(depth, valid_full, fx, fy, cx, cy)
 
     keep = build_filter_keep_mask(
         points,

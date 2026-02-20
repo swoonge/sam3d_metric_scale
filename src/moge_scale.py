@@ -16,6 +16,11 @@ import numpy as np
 import torch
 
 from camera_intrinsics import load_intrinsics_tuple
+from geometry_depth_utils import (
+    backproject_depth,
+    build_filter_keep_mask,
+    save_points_ply,
+)
 
 
 def resolve_moge_root(repo_root: Path) -> Path:
@@ -109,17 +114,6 @@ def parse_cam_k(cam_k_path: Path) -> tuple[float, float, float, float]:
     return load_intrinsics_tuple(cam_k_path)
 
 
-def backproject_depth(
-    depth: np.ndarray, valid_mask: np.ndarray, fx: float, fy: float, cx: float, cy: float
-) -> np.ndarray:
-    """Depth + intrinsics 로 카메라 좌표계 포인트 생성."""
-    ys, xs = np.where(valid_mask)
-    z = depth[valid_mask].astype(np.float32)
-    x = (xs - cx) * z / fx
-    y = (ys - cy) * z / fy
-    return np.stack([x, y, z], axis=1).astype(np.float32)
-
-
 def compute_scale(points: np.ndarray, method: str) -> dict:
     """포인트 bbox 기반 스케일 통계를 계산."""
     mins = points.min(axis=0)
@@ -140,74 +134,6 @@ def compute_scale(points: np.ndarray, method: str) -> dict:
         "scale_method": method,
         "scale_value": value,
     }
-
-
-def mad_keep_mask(values: np.ndarray, thresh: float) -> np.ndarray:
-    """MAD 기반 keep mask 생성."""
-    if thresh <= 0:
-        return np.ones(values.shape[0], dtype=bool)
-    median = np.median(values)
-    mad = np.median(np.abs(values - median))
-    if mad < 1e-8:
-        return np.ones(values.shape[0], dtype=bool)
-    z_score = 0.6745 * (values - median) / mad
-    return np.abs(z_score) <= thresh
-
-
-def build_filter_keep_mask(
-    points: np.ndarray,
-    ys: np.ndarray,
-    xs: np.ndarray,
-    shape: tuple[int, int],
-    border_margin: int,
-    depth_mad: float,
-    radius_mad: float,
-) -> np.ndarray:
-    """경계 제거 + MAD 기반 아웃라이어 제거 keep mask 생성."""
-    keep = np.ones(points.shape[0], dtype=bool)
-    if border_margin > 0 and ys.shape[0] == points.shape[0]:
-        height, width = shape
-        keep &= (
-            (ys >= border_margin)
-            & (ys < height - border_margin)
-            & (xs >= border_margin)
-            & (xs < width - border_margin)
-        )
-
-    filtered = points[keep]
-    if filtered.size == 0:
-        return np.zeros(points.shape[0], dtype=bool)
-
-    if depth_mad > 0 or radius_mad > 0:
-        sub_keep = np.ones(filtered.shape[0], dtype=bool)
-        if depth_mad > 0:
-            sub_keep &= mad_keep_mask(filtered[:, 2], depth_mad)
-        if radius_mad > 0:
-            center = np.median(filtered, axis=0)
-            radius = np.linalg.norm(filtered - center, axis=1)
-            sub_keep &= mad_keep_mask(radius, radius_mad)
-        indices = np.where(keep)[0]
-        keep_final = np.zeros(points.shape[0], dtype=bool)
-        keep_final[indices[sub_keep]] = True
-        return keep_final
-
-    return keep
-
-
-def save_points_ply(points: np.ndarray, path: Path) -> None:
-    """(N, 3) 포인트를 ASCII PLY로 저장."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    points = points.astype(np.float32)
-    with path.open("w", encoding="utf-8") as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {points.shape[0]}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("end_header\n")
-        if points.shape[0] > 0:
-            np.savetxt(f, points, fmt="%.6f %.6f %.6f")
 
 
 def build_visualization(
