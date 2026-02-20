@@ -214,6 +214,22 @@ def flatten_pointmap(pointmap_hwc: np.ndarray, colors_hwc: np.ndarray | None) ->
     return points, colors
 
 
+class PointmapInputCompat(dict):
+    """Compatibility wrapper for pointmap inputs.
+
+    - Newer SAM3D pipelines read dict keys: {"pointmap", "intrinsics"}
+    - Legacy pipelines may call .to(device) directly on pointmap input
+    """
+
+    def __init__(self, pointmap: torch.Tensor, intrinsics: np.ndarray | None):
+        super().__init__()
+        self["pointmap"] = pointmap
+        self["intrinsics"] = intrinsics
+
+    def to(self, *args, **kwargs):
+        return self["pointmap"].to(*args, **kwargs)
+
+
 def write_pointmap_ply(path: Path, points: np.ndarray, colors: np.ndarray | None) -> None:
     """포인트클라우드를 ASCII PLY로 저장."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -597,15 +613,29 @@ def main() -> int:
                 .to(points_flat.device)
             )
             points_p3d = cam_to_p3d.transform_points(points_flat)
-            pointmap_input = {
-                "pointmap": points_p3d.reshape(pointmap_tensor.shape),
-                "intrinsics": cam_k,
-            }
+            pointmap_input = PointmapInputCompat(
+                pointmap=points_p3d.reshape(pointmap_tensor.shape),
+                intrinsics=cam_k,
+            )
         except Exception as exc:
             raise RuntimeError("Failed to convert pointmap to Pytorch3D frame.") from exc
 
     # SAM3D 추론 실행
-    output = inference(image, mask, seed=args.seed, pointmap=pointmap_input)
+    try:
+        output = inference(image, mask, seed=args.seed, pointmap=pointmap_input)
+    except AttributeError as exc:
+        # Some older pipelines expect a tensor-like pointmap and call .to(device).
+        # Retry once with tensor-only input to maximize cross-version compatibility.
+        if pointmap_input is not None and "has no attribute 'to'" in str(exc):
+            print(
+                "Pointmap input compatibility fallback: retrying with tensor-only pointmap."
+            )
+            retry_pointmap = pointmap_input
+            if isinstance(pointmap_input, dict):
+                retry_pointmap = pointmap_input.get("pointmap", pointmap_input)
+            output = inference(image, mask, seed=args.seed, pointmap=retry_pointmap)
+        else:
+            raise
     if "gs" not in output:
         print("SAM3D output missing 'gs' key")
         return 1
