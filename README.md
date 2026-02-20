@@ -190,6 +190,34 @@ MoGe(옵션) 활성화:
 - `--mesh-target-faces`: 목표 face 수 (비율 대신 사용, 기본: 20000)
 - `--no-mesh-decimate`: 메시 밀도 조정 비활성화
 
+메시 디케메이트 강도 조절 가이드:
+- 우선순위: `--mesh-target-faces`가 `0`보다 크면 `--mesh-decimate-ratio`는 무시됩니다.
+- 권장 시작값:
+  - 빠른 미리보기: `--mesh-target-faces 5000` 또는 `10000`
+  - 기본 균형(권장): `--mesh-target-faces 20000`
+  - 디테일 보존: `--mesh-target-faces 50000`~`200000`
+
+전체 파이프라인에서 face 수로 직접 조절:
+```bash
+./run_full_pipeline.sh \
+  --image /path/to/rgb.png \
+  --depth-image /path/to/depth.png \
+  --cam-k /path/to/cam_K.txt \
+  --mesh-target-faces 10000 \
+  --output-base outputs/demo
+```
+
+비율 모드로 조절(`target-faces`를 0으로 설정):
+```bash
+./run_full_pipeline.sh \
+  --image /path/to/rgb.png \
+  --depth-image /path/to/depth.png \
+  --cam-k /path/to/cam_K.txt \
+  --mesh-target-faces 0 \
+  --mesh-decimate-ratio 0.03 \
+  --output-base outputs/demo
+```
+
 실행 전 preflight만 단독 확인:
 ```bash
 python src/preflight_check.py \
@@ -223,6 +251,7 @@ conda run -n sam3d-objects python src/mesh_decimate.py \
 ```
 옵션 예시:
 - `--target-faces 200000`: 목표 face 수 지정
+- `--target-faces 0 --ratio 0.03`: 비율 모드 사용
 - `--method open3d`: open3d quadric decimation 강제
 
 ## 스케일 추정 방식
