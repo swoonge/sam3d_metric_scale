@@ -111,7 +111,7 @@ Options:
   --scale-algo NAME         icp | teaserpp (default: icp)
   --scale-mode NAME         default | scale_only (default: scale_only)
   --estimate-scale          Enable scale estimation against target points
-  --fine-registration       After scale-only, run TEASER++ (no scale) once for R/t refine
+  --fine-registration       After scale-only, run ICP once for R/t refine
   --icp-max-iters INT       ICP max iterations (default: 1)
   --cam-k PATH              Camera intrinsics (3x3) for real depth backprojection
   --mesh-decimate           Enable mesh decimation after scaling (default: on)

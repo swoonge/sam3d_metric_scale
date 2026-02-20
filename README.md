@@ -164,7 +164,7 @@ MoGe(옵션) 활성화:
 - `--output-base`: 결과 저장 루트
 - `--run-moge`: MoGe 실행(기본 off)
 - `--scale-algo`: `icp` | `teaserpp` (기본: `icp`)
-- `--fine-registration`: 스케일 후 추가 정합(TEASER++ 사용 시)
+- `--fine-registration`: `scale_only` 후 ICP로 R/t 추가 정합
 - `--mesh-decimate-ratio`: 스케일 보정된 메시의 face 비율 (기본: 0.02)
 - `--mesh-target-faces`: 목표 face 수 (비율 대신 사용, 기본: 20000)
 - `--no-mesh-decimate`: 메시 밀도 조정 비활성화
@@ -199,7 +199,10 @@ conda run -n sam3d-objects python src/mesh_decimate.py \
 - `sam3d_scale.py`에서 알고리즘을 선택해 실험합니다.
   - `icp`: Umeyama + ICP
   - `teaserpp`: TEASER++ (외부 의존)
-- 산출물: `*_scale.txt`에 스케일 값만 저장합니다.
+- 산출물: `*_scale.txt`에 아래 3줄 형식으로 저장합니다.
+  - `base`: SAM3D pose scale (벡터)
+  - `extra`: 정합으로 추정한 추가 스케일 (스칼라)
+  - `final`: 최종 적용 스케일(벡터, `base * extra`)
 
 ## 환경 변수
 - `SAM2_ROOT`: SAM2 레포 경로

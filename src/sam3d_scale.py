@@ -209,7 +209,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fine-registration",
         action="store_true",
-        help="After scale-only, run TEASER++ once (without scale) for R/t refinement.",
+        help="After scale-only, run ICP once (without scale) for R/t refinement.",
     )
     parser.add_argument(
         "--refine-registration",
