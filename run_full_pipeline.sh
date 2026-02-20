@@ -46,7 +46,7 @@ sam3d_compile=0
 moge_model="Ruicheng/moge-2-vitl-normal"
 scale_method="bbox_diag"
 min_pixels=100
-cam_k_path="/home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_box/cam_K.txt"
+cam_k_path=""
 run_moge=0
 
 # Scale matching options
@@ -293,10 +293,18 @@ image_path="$(resolve_path "${image_path}")"
 output_base="$(resolve_path "${output_base}")"
 sam3d_config="$(resolve_path "${sam3d_config}")"
 if [[ -n "${depth_image_path}" ]]; then
+  if [[ -z "${cam_k_path}" ]]; then
+    echo "--depth-image requires --cam-k (3x3 intrinsics txt)."
+    exit 1
+  fi
   depth_image_path="$(resolve_path "${depth_image_path}")"
 fi
 if [[ -n "${cam_k_path}" ]]; then
   cam_k_path="$(resolve_path "${cam_k_path}")"
+fi
+if [[ -n "${cam_k_path}" && ! -f "${cam_k_path}" ]]; then
+  echo "Missing camera intrinsics: ${cam_k_path}"
+  exit 1
 fi
 
 image_stem="$(basename "${image_path}")"
