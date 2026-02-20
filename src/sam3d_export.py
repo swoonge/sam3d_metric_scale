@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from camera_intrinsics import load_intrinsics_matrix
 import sam3d_scale_utils as scale_utils
 
 
@@ -168,11 +169,7 @@ def load_ply_points(path: Path):
 
 def read_cam_k(path: Path) -> np.ndarray:
     """3x3 intrinsics 텍스트 파일 로드."""
-    content = path.read_text(encoding="utf-8").strip().split()
-    values = [float(v) for v in content if v]
-    if len(values) == 9:
-        return np.array(values, dtype=np.float32).reshape(3, 3)
-    raise ValueError(f"Invalid camera intrinsics file: {path}")
+    return load_intrinsics_matrix(path)
 
 
 def load_depth_image(path: Path, scale: float) -> np.ndarray:

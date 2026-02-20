@@ -15,6 +15,8 @@ import cv2
 import numpy as np
 import torch
 
+from camera_intrinsics import load_intrinsics_tuple
+
 
 def resolve_moge_root(repo_root: Path) -> Path:
     """MoGe 레포 위치를 환경변수/기본 후보에서 탐색."""
@@ -104,12 +106,7 @@ def load_mask(path: Path) -> np.ndarray:
 
 def parse_cam_k(cam_k_path: Path) -> tuple[float, float, float, float]:
     """cam_K.txt(3x3 or fx fy cx cy) 로드."""
-    k_mat = np.loadtxt(str(cam_k_path)).astype(np.float32)
-    if k_mat.size == 4:
-        fx, fy, cx, cy = [float(v) for v in k_mat.ravel()]
-        return fx, fy, cx, cy
-    k_mat = k_mat.reshape(3, 3)
-    return float(k_mat[0, 0]), float(k_mat[1, 1]), float(k_mat[0, 2]), float(k_mat[1, 2])
+    return load_intrinsics_tuple(cam_k_path)
 
 
 def backproject_depth(
