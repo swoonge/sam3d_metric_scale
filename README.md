@@ -22,12 +22,14 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 - `datas/`: 샘플 이미지
 - `outputs/`: 결과 저장(자동 생성, gitignored)
 - `tests/`: 핵심 회귀 테스트(pytest)
-- 외부 레포(로컬 의존, gitignored): `sam2/`, `sam-3d-objects/`, `MoGe/`, (옵션) `TEASER-plusplus/`
+- 외부 레포(로컬 의존, gitignored):
+  - 필수: `sam2/`, `sam-3d-objects/`
+  - 옵션: `MoGe/` (`--run-moge` 사용 시), `TEASER-plusplus/` (`--scale-algo teaserpp` 사용 시)
 
 ## 외부 레포 링크
 - SAM2: https://github.com/facebookresearch/sam2
 - SAM3D Objects: https://github.com/facebookresearch/sam-3d-objects
-- MoGe: https://github.com/microsoft/MoGe
+- MoGe (옵션, `--run-moge` 사용 시): https://github.com/microsoft/MoGe
 - TEASER++ (옵션): https://github.com/MIT-SPARK/TEASER-plusplus
 
 ## 출력 구조
@@ -42,11 +44,15 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 - 메시 디케메이트 결과는 `*_scaled_mesh_decimated.{glb|ply|obj}`로 저장됩니다.
 
 ## 사전 준비
-- Conda env: `sam2`, `sam3d-objects`, `moge` (옵션), `teaserpp` (TEASER++ 사용 시에만 필요)
+- Conda env:
+  - 필수: `sam2`, `sam3d-objects`
+  - 옵션: `moge` (`--run-moge` 사용 시), `teaserpp` (`--scale-algo teaserpp` 사용 시)
   - `--run-moge`를 주지 않으면 MoGe 환경은 필요 없습니다.
+  - `--depth-image` + `--cam-k`만 사용하는 경우에도 MoGe 없이 실행 가능합니다.
   - 기본 `--scale-algo`는 `icp`라서 TEASER++ 환경 없이도 실행됩니다.
 - 외부 레포 위치:
-  - `sam2/`, `sam-3d-objects/`, `MoGe/`를 이 레포 루트에 두는 구성을 권장합니다.
+  - `sam2/`, `sam-3d-objects/`를 이 레포 루트에 두는 구성을 권장합니다.
+  - MoGe를 쓸 경우(`--run-moge`) `MoGe/`도 같은 루트에 두세요.
   - 다른 위치라면 `SAM2_ROOT`, `SAM3D_ROOT`, `MOGE_ROOT`로 지정하세요.
 - SAM3D 사용은 HF 승인 필요.
 - 파이프라인 실행 전 `src/preflight_check.py`를 통해 의존성/입력 파일을 검사합니다.
@@ -61,6 +67,9 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 ```bash
 git clone https://github.com/facebookresearch/sam2.git sam2
 git clone https://github.com/facebookresearch/sam-3d-objects.git sam-3d-objects
+```
+MoGe를 사용할 경우에만 추가:
+```bash
 git clone https://github.com/microsoft/MoGe.git MoGe
 ```
 
@@ -92,7 +101,7 @@ conda run -n sam3d-objects hf download --repo-type model \
 mv sam-3d-objects/checkpoints/hf-download/checkpoints sam-3d-objects/checkpoints/hf
 ```
 
-### 4) MoGe 환경
+### 4) (옵션) MoGe 환경
 ```bash
 conda create -n moge python=3.10 -y
 conda run -n moge python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
@@ -149,6 +158,7 @@ MoGe(옵션) 활성화:
   --run-moge \
   --output-base outputs/demo
 ```
+`--run-moge`를 주지 않으면 MoGe 단계는 건너뜁니다.
 
 목표 face 수로 직접 지정:
 ```bash
@@ -236,6 +246,7 @@ conda run -n sam3d-objects python src/mesh_decimate.py \
 - `ModuleNotFoundError: sam2`  
   - `conda run -n sam2 python -m pip install -e ./sam2` 재설치 또는 `SAM2_ROOT` 설정.
 - `ModuleNotFoundError: moge`  
+  - `--run-moge`를 사용할 때만 필요한 오류입니다.
   - `conda run -n moge python -m pip install -e ./MoGe` 재설치 또는 `MOGE_ROOT` 설정.
 - `ModuleNotFoundError: sam3d_objects`  
   - `conda run -n sam3d-objects python -m pip install -e ".[inference]"` 재설치 또는 `SAM3D_ROOT` 설정.
