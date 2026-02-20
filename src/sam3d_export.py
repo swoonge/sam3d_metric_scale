@@ -61,9 +61,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--depth-scale",
-        type=float,
-        default=1.0,
-        help="Depth scale to convert depth image to meters (default: 1.0).",
+        type=str,
+        default="1.0",
+        help="Depth scale to convert depth image to meters (auto | numeric, default: 1.0).",
     )
     parser.add_argument(
         "--pointmap-from-depth",
@@ -172,19 +172,45 @@ def read_cam_k(path: Path) -> np.ndarray:
     return load_intrinsics_matrix(path)
 
 
-def load_depth_image(path: Path, scale: float) -> np.ndarray:
-    """Depth 이미지를 float32로 로드하고 스케일 적용."""
+def _resolve_depth_scale(depth_raw: np.ndarray, scale: str | float) -> float:
+    """Resolve depth scale from user input (auto | numeric)."""
+    if isinstance(scale, str):
+        scale_raw = scale.strip().lower()
+        if scale_raw == "auto":
+            # heuristic: uint16 or large values are usually millimeters
+            if depth_raw.dtype.kind in ("u", "i") and float(np.max(depth_raw)) > 50:
+                return 0.001
+            if 20.0 < float(np.max(depth_raw)) < 10000.0:
+                return 0.001
+            return 1.0
+        try:
+            scale_val = float(scale_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid --depth-scale '{scale}'. Use auto or numeric value."
+            ) from exc
+    else:
+        scale_val = float(scale)
+
+    if not np.isfinite(scale_val) or scale_val <= 0.0:
+        raise ValueError(f"Invalid depth scale: {scale_val}")
+    return float(scale_val)
+
+
+def load_depth_image(path: Path, scale: str | float) -> tuple[np.ndarray, float]:
+    """Load depth image and apply resolved depth scale."""
     import cv2
 
-    depth = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-    if depth is None:
+    depth_raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if depth_raw is None:
         raise ValueError(f"Failed to read depth image: {path}")
-    if depth.ndim == 3:
-        depth = depth[:, :, 0]
-    depth = depth.astype(np.float32)
-    if scale != 1.0:
-        depth *= float(scale)
-    return depth
+    if depth_raw.ndim == 3:
+        depth_raw = depth_raw[:, :, 0]
+    scale_value = _resolve_depth_scale(depth_raw, scale)
+    depth = depth_raw.astype(np.float32)
+    if scale_value != 1.0:
+        depth *= float(scale_value)
+    return depth, float(scale_value)
 
 
 def depth_to_pointmap(depth: np.ndarray, cam_k: np.ndarray) -> np.ndarray:
@@ -596,7 +622,11 @@ def main() -> int:
         if not cam_k_path.exists():
             raise ValueError(f"Missing camera intrinsics: {cam_k_path}")
 
-        depth = load_depth_image(depth_path, args.depth_scale)
+        depth, depth_scale_value = load_depth_image(depth_path, args.depth_scale)
+        print(
+            f"Using depth scale for SAM3D pointmap: {depth_scale_value:.6g} "
+            f"(input={args.depth_scale})"
+        )
         cam_k = read_cam_k(cam_k_path)
         if depth.shape[:2] != image.shape[:2]:
             import cv2
