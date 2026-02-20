@@ -59,6 +59,24 @@ def default_output_path(input_path: Path) -> Path:
     return input_path.with_name(f"{input_path.stem}_decimated{input_path.suffix}")
 
 
+def _cleanup_faces_compat(mesh) -> None:
+    # trimesh API changed between major versions:
+    # - v3: remove_duplicate_faces/remove_degenerate_faces
+    # - v4: unique_faces/nondegenerate_faces + update_faces
+    if hasattr(mesh, "remove_duplicate_faces"):
+        mesh.remove_duplicate_faces()
+    elif hasattr(mesh, "unique_faces") and hasattr(mesh, "update_faces"):
+        mesh.update_faces(mesh.unique_faces())
+
+    if hasattr(mesh, "remove_degenerate_faces"):
+        mesh.remove_degenerate_faces()
+    elif hasattr(mesh, "nondegenerate_faces") and hasattr(mesh, "update_faces"):
+        mesh.update_faces(mesh.nondegenerate_faces())
+
+    if hasattr(mesh, "remove_unreferenced_vertices"):
+        mesh.remove_unreferenced_vertices()
+
+
 def load_mesh(path: Path):
     import trimesh
 
@@ -70,9 +88,7 @@ def load_mesh(path: Path):
     if not isinstance(mesh, trimesh.Trimesh):
         raise ValueError(f"Unsupported mesh type: {type(mesh)}")
 
-    mesh.remove_duplicate_faces()
-    mesh.remove_degenerate_faces()
-    mesh.remove_unreferenced_vertices()
+    _cleanup_faces_compat(mesh)
     return mesh
 
 
@@ -115,10 +131,21 @@ def simplify_open3d(mesh, target_faces: int):
 
 
 def simplify_trimesh(mesh, target_faces: int):
-    if not hasattr(mesh, "simplify_quadratic_decimation"):
-        raise RuntimeError("trimesh.simplify_quadratic_decimation not available.")
-    mesh_out = mesh.simplify_quadratic_decimation(int(target_faces))
-    return mesh_out, "trimesh"
+    if hasattr(mesh, "simplify_quadratic_decimation"):
+        mesh_out = mesh.simplify_quadratic_decimation(int(target_faces))
+        return mesh_out, "trimesh"
+
+    if hasattr(mesh, "simplify_quadric_decimation"):
+        try:
+            mesh_out = mesh.simplify_quadric_decimation(face_count=int(target_faces))
+        except TypeError:
+            mesh_out = mesh.simplify_quadric_decimation(int(target_faces))
+        return mesh_out, "trimesh"
+
+    raise RuntimeError(
+        "No trimesh decimation API found "
+        "(expected simplify_quadratic_decimation or simplify_quadric_decimation)."
+    )
 
 
 def simplify_cluster(mesh, target_faces: int):
