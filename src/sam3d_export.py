@@ -202,6 +202,22 @@ def depth_to_pointmap(depth: np.ndarray, cam_k: np.ndarray) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
+def apply_pointmap_mask(pointmap: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Apply foreground mask on pointmap by zeroing background points."""
+    mask_bool = np.asarray(mask).astype(bool)
+    if mask_bool.shape != pointmap.shape[:2]:
+        import cv2
+
+        mask_bool = cv2.resize(
+            mask_bool.astype(np.uint8),
+            (pointmap.shape[1], pointmap.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+    masked = pointmap.copy()
+    masked[~mask_bool] = 0.0
+    return masked
+
+
 def flatten_pointmap(pointmap_hwc: np.ndarray, colors_hwc: np.ndarray | None) -> tuple[np.ndarray, np.ndarray | None]:
     """HWC pointmap/색상을 Nx3으로 변환하고 NaN/Inf 포인트 제거."""
     points = pointmap_hwc.reshape(-1, 3)
@@ -594,10 +610,8 @@ def main() -> int:
                 interpolation=cv2.INTER_NEAREST,
             )
         pointmap = depth_to_pointmap(depth, cam_k)
-        # if args.pointmap_mask:
-        #     mask_bool = mask.astype(bool)
-        #     pointmap = pointmap.copy()
-        #     pointmap[~mask_bool] = 0.0
+        if args.pointmap_mask:
+            pointmap = apply_pointmap_mask(pointmap, mask)
 
         try:
             from sam3d_objects.pipeline.inference_pipeline_pointmap import (
