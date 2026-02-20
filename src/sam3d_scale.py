@@ -13,12 +13,17 @@ import numpy as np
 
 from sam3d_scale_icp import estimate_scale as estimate_scale_icp
 from sam3d_scale_utils import (
+    clamp_scale_value,
+    estimate_rms_scale,
     load_moge_points,
     load_ply_points,
     resolve_path,
     sample_points,
     write_scaled_ply,
 )
+
+MIN_EXTRA_SCALE = 1e-6
+MAX_EXTRA_SCALE = 1e3
 
 
 def strip_pose_suffix(stem: str) -> str:
@@ -403,12 +408,34 @@ def main() -> int:
     if args.mode == "scale_only":
         if not args.estimate_scale:
             scale_value = 1.0
+            scale_mode = "pass_through"
         else:
-            denom = float(np.sum(sam_sample * sam_sample))
-            if denom <= 0:
-                print("Invalid SAM3D points for scale-only estimation.")
+            try:
+                scale_raw, _, _ = estimate_rms_scale(sam_sample, moge_sample)
+            except Exception as exc:
+                print(f"Failed to estimate RMS scale: {exc}")
                 return 1
-            scale_value = float(np.sum(sam_sample * moge_sample) / denom)
+            scale_value = float(scale_raw)
+            if not np.isfinite(scale_value):
+                print("Invalid scale from RMS estimation (non-finite).")
+                return 1
+            scale_clamped = clamp_scale_value(
+                scale_value,
+                min_value=MIN_EXTRA_SCALE,
+                max_value=MAX_EXTRA_SCALE,
+            )
+            if not np.isclose(scale_clamped, scale_value):
+                print(
+                    "Scale-only RMS result was clamped: "
+                    f"{scale_value:.6g} -> {scale_clamped:.6g}"
+                )
+            scale_value = scale_clamped
+            scale_mode = "scale_only_rms"
+            print(
+                "Scale-only RMS estimation: "
+                f"sam_points={sam_sample.shape[0]} moge_points={moge_sample.shape[0]} "
+                f"scale={scale_value:.6g}"
+            )
         r = np.eye(3, dtype=np.float32)
         t = np.zeros(3, dtype=np.float32)
         result = {
@@ -422,7 +449,7 @@ def main() -> int:
             "metrics": {
                 "noise_bound": 0.0,
                 "corr_count": 0,
-                "corr_mode": "scale_only" if args.estimate_scale else "pass_through",
+                "corr_mode": scale_mode,
                 "iterations": 1,
                 "voxel_size": 0.0,
                 "icp_refine": False,

@@ -124,6 +124,19 @@ def estimate_rms_scale(src: np.ndarray, dst: np.ndarray) -> Tuple[float, np.ndar
     return scale, r, t.astype(np.float32)
 
 
+def clamp_scale_value(scale: float, min_value: float = 1e-6, max_value: float = 1e3) -> float:
+    """안전한 양수 범위로 스케일을 제한."""
+    scale = float(scale)
+    if not np.isfinite(scale):
+        raise ValueError("Scale is not finite.")
+    scale = abs(scale)
+    if scale < min_value:
+        return float(min_value)
+    if scale > max_value:
+        return float(max_value)
+    return float(scale)
+
+
 def umeyama_alignment(
     src: np.ndarray, dst: np.ndarray
 ) -> Tuple[float, np.ndarray, np.ndarray]:
