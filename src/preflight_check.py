@@ -81,32 +81,45 @@ def _module_marker(module_name: str, root: Path) -> Path:
     return root
 
 
-def check_local_import_fallback(env_name: str, module_name: str, repo_root: Path) -> tuple[bool, str]:
+def _resolve_local_repo(repo_root: Path, module_name: str) -> Path | None:
     for candidate in _module_candidates(repo_root, module_name):
         marker = _module_marker(module_name, candidate)
-        if not marker.exists():
-            continue
-        code = (
-            "import sys; "
-            f"sys.path.insert(0, {repr(str(candidate))}); "
-            f"{_import_code(module_name)}"
+        if marker.exists():
+            return candidate
+    return None
+
+
+def check_local_repo_import(env_name: str, module_name: str, repo_root: Path) -> tuple[bool, str]:
+    local_root = _resolve_local_repo(repo_root, module_name)
+    if local_root is None:
+        candidates = ", ".join(str(p) for p in _module_candidates(repo_root, module_name))
+        return (
+            False,
+            f"Local repo for '{module_name}' is required but not found.\n"
+            f"Searched: {candidates}",
         )
-        ok, stderr, cmd = _run_python(env_name, code)
-        if ok:
-            return True, str(candidate)
-        return False, (
-            f"Conda env '{env_name}' cannot import '{module_name}' even with local repo path.\n"
-            f"Repo path: {candidate}\n"
-            f"Command: {cmd}\n"
-            f"Error: {stderr}"
-        )
-    return False, ""
+
+    code = (
+        "import sys; "
+        f"sys.path.insert(0, {repr(str(local_root))}); "
+        f"{_import_code(module_name)}"
+    )
+    ok, stderr, cmd = _run_python(env_name, code)
+    if ok:
+        return True, ""
+
+    return (
+        False,
+        f"Conda env '{env_name}' cannot import '{module_name}' from required local repo.\n"
+        f"Local repo: {local_root}\n"
+        f"Command: {cmd}\n"
+        f"Error: {stderr}"
+    )
 
 
 def main() -> int:
     args = parse_args()
     errors: list[str] = []
-    warnings: list[str] = []
     repo_root = Path(__file__).resolve().parents[1]
 
     if shutil.which("conda") is None:
@@ -135,20 +148,8 @@ def main() -> int:
         local_dep_checks.append((args.moge_env, "moge"))
 
     for env_name, module_name in local_dep_checks:
-        ok, msg = check_import(env_name, module_name)
-        if ok:
-            continue
-        fallback_ok, fallback_msg = check_local_import_fallback(
-            env_name, module_name, repo_root
-        )
-        if fallback_ok:
-            warnings.append(
-                f"'{module_name}' is not pip-installed in env '{env_name}', "
-                f"but local repo import works ({fallback_msg})."
-            )
-        elif fallback_msg:
-            errors.append(fallback_msg)
-        else:
+        ok, msg = check_local_repo_import(env_name, module_name, repo_root)
+        if not ok:
             errors.append(msg)
 
     scale_checks: list[tuple[str, str]] = [
@@ -165,14 +166,10 @@ def main() -> int:
         for err in errors:
             print(f"- {err}")
         print(
-            "\nInstall missing modules in the reported conda env(s) and retry."
+            "\nFix the issues above and retry. "
+            "Core deps (sam2/sam3d-objects/moge) must be available from local repos."
         )
         return 1
-
-    if warnings:
-        print("Preflight warnings:")
-        for warn in warnings:
-            print(f"- {warn}")
 
     print("Preflight OK")
     return 0
