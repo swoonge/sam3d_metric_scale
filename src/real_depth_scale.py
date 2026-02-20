@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-full-ply", type=Path, required=True)
     parser.add_argument("--cam-k", type=Path, default=None)
     parser.add_argument("--min-pixels", type=int, default=100)
-    parser.add_argument("--depth-scale", type=str, default="auto")
+    parser.add_argument("--depth-scale", type=str, default="0.001")
     parser.add_argument("--border-margin", type=int, default=5)
     parser.add_argument("--depth-mad", type=float, default=2.5)
     parser.add_argument("--radius-mad", type=float, default=2.5)

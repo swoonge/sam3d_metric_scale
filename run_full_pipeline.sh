@@ -27,7 +27,7 @@ fi
 image_path="${default_image}"
 depth_image_path=""
 # real depth scale (e.g., 0.001 if depth is in millimeters)
-depth_scale="auto"
+depth_scale="0.001"
 
 # 출력 베이스 디렉터리
 output_base="${repo_root}/outputs"
@@ -94,7 +94,7 @@ Usage: $(basename "$0") [options]
 Options:
   --image PATH              Input image path for SAM2 UI
   --depth-image PATH        Optional real depth image path (if provided, generate real_scale outputs)
-  --depth-scale VAL         real depth scale (auto | numeric, default: auto)
+  --depth-scale VAL         real depth scale (auto | numeric, default: 0.001)
   --output-base PATH        Base output directory (default: outputs)
   --latest                  Process latest mask only (default: all)
   --sam2-env NAME           Conda env for SAM2 (default: sam2)

@@ -62,8 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--depth-scale",
         type=str,
-        default="1.0",
-        help="Depth scale to convert depth image to meters (auto | numeric, default: 1.0).",
+        default="0.001",
+        help="Depth scale to convert depth image to meters (auto | numeric, default: 0.001).",
     )
     parser.add_argument(
         "--pointmap-from-depth",
