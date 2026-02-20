@@ -27,7 +27,7 @@ fi
 image_path="${default_image}"
 depth_image_path=""
 # real depth scale (e.g., 0.001 if depth is in millimeters)
-depth_scale="0.001"
+depth_scale="auto"
 
 # 출력 베이스 디렉터리
 output_base="${repo_root}/outputs"

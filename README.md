@@ -160,7 +160,7 @@ MoGe(옵션) 활성화:
 - `--image`: 입력 RGB 이미지
 - `--depth-image`: real depth 이미지(있으면 real_scale 생성)
 - `--cam-k`: 3x3 intrinsics 텍스트 파일
-- `--depth-scale`: depth 스케일 (예: mm → m이면 0.001)
+- `--depth-scale`: depth 스케일 (`auto` 기본, mm → m이면 0.001)
 - `--output-base`: 결과 저장 루트
 - `--run-moge`: MoGe 실행(기본 off)
 - `--scale-algo`: `icp` | `teaserpp` (기본: `icp`)
