@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,26 +22,92 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def check_import(env_name: str, module_name: str) -> tuple[bool, str]:
-    cmd = ["conda", "run", "-n", env_name, "python", "-c", f"import {module_name}"]
+def _run_python(env_name: str, code: str) -> tuple[bool, str, str]:
+    cmd = ["conda", "run", "-n", env_name, "python", "-c", code]
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    cmd_text = " ".join(cmd)
     if proc.returncode == 0:
-        return True, ""
-
+        return True, "", cmd_text
     stderr = (proc.stderr or "").strip()
     if len(stderr) > 400:
         stderr = stderr[-400:]
-    message = (
+    return False, stderr, cmd_text
+
+
+def _import_code(module_name: str) -> str:
+    if module_name == "sam3d_objects":
+        return "import os; os.environ['LIDRA_SKIP_INIT']='true'; import sam3d_objects"
+    return f"import {module_name}"
+
+
+def check_import(env_name: str, module_name: str) -> tuple[bool, str]:
+    ok, stderr, cmd = _run_python(env_name, _import_code(module_name))
+    if ok:
+        return True, ""
+    return (
+        False,
         f"Conda env '{env_name}' missing import '{module_name}'.\n"
-        f"Command: {' '.join(cmd)}\n"
-        f"Error: {stderr}"
+        f"Command: {cmd}\n"
+        f"Error: {stderr}",
     )
-    return False, message
+
+
+def _module_candidates(repo_root: Path, module_name: str) -> list[Path]:
+    if module_name == "sam2":
+        env_root = os.environ.get("SAM2_ROOT")
+        cands = [Path(env_root)] if env_root else []
+        cands += [repo_root / "sam2", repo_root.parent / "sam2"]
+        return cands
+    if module_name == "sam3d_objects":
+        env_root = os.environ.get("SAM3D_ROOT")
+        cands = [Path(env_root)] if env_root else []
+        cands += [repo_root / "sam-3d-objects", repo_root.parent / "sam-3d-objects"]
+        return cands
+    if module_name == "moge":
+        env_root = os.environ.get("MOGE_ROOT")
+        cands = [Path(env_root)] if env_root else []
+        cands += [repo_root / "MoGe", repo_root.parent / "MoGe"]
+        return cands
+    return []
+
+
+def _module_marker(module_name: str, root: Path) -> Path:
+    if module_name == "sam2":
+        return root / "sam2"
+    if module_name == "sam3d_objects":
+        return root / "sam3d_objects"
+    if module_name == "moge":
+        return root / "moge"
+    return root
+
+
+def check_local_import_fallback(env_name: str, module_name: str, repo_root: Path) -> tuple[bool, str]:
+    for candidate in _module_candidates(repo_root, module_name):
+        marker = _module_marker(module_name, candidate)
+        if not marker.exists():
+            continue
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {repr(str(candidate))}); "
+            f"{_import_code(module_name)}"
+        )
+        ok, stderr, cmd = _run_python(env_name, code)
+        if ok:
+            return True, str(candidate)
+        return False, (
+            f"Conda env '{env_name}' cannot import '{module_name}' even with local repo path.\n"
+            f"Repo path: {candidate}\n"
+            f"Command: {cmd}\n"
+            f"Error: {stderr}"
+        )
+    return False, ""
 
 
 def main() -> int:
     args = parse_args()
     errors: list[str] = []
+    warnings: list[str] = []
+    repo_root = Path(__file__).resolve().parents[1]
 
     if shutil.which("conda") is None:
         errors.append("conda not found in PATH.")
@@ -60,16 +127,35 @@ def main() -> int:
     if cam_k_path is not None and not cam_k_path.exists():
         errors.append(f"Missing camera intrinsics: {cam_k_path}")
 
-    checks: list[tuple[str, str]] = [
+    local_dep_checks: list[tuple[str, str]] = [
         (args.sam2_env, "sam2"),
         (args.sam3d_env, "sam3d_objects"),
+    ]
+    if args.run_moge:
+        local_dep_checks.append((args.moge_env, "moge"))
+
+    for env_name, module_name in local_dep_checks:
+        ok, msg = check_import(env_name, module_name)
+        if ok:
+            continue
+        fallback_ok, fallback_msg = check_local_import_fallback(
+            env_name, module_name, repo_root
+        )
+        if fallback_ok:
+            warnings.append(
+                f"'{module_name}' is not pip-installed in env '{env_name}', "
+                f"but local repo import works ({fallback_msg})."
+            )
+        elif fallback_msg:
+            errors.append(fallback_msg)
+        else:
+            errors.append(msg)
+
+    scale_checks: list[tuple[str, str]] = [
         (args.scale_env, "trimesh"),
         (args.scale_env, "plyfile"),
     ]
-    if args.run_moge:
-        checks.append((args.moge_env, "moge"))
-
-    for env_name, module_name in checks:
+    for env_name, module_name in scale_checks:
         ok, msg = check_import(env_name, module_name)
         if not ok:
             errors.append(msg)
@@ -82,6 +168,11 @@ def main() -> int:
             "\nInstall missing modules in the reported conda env(s) and retry."
         )
         return 1
+
+    if warnings:
+        print("Preflight warnings:")
+        for warn in warnings:
+            print(f"- {warn}")
 
     print("Preflight OK")
     return 0
