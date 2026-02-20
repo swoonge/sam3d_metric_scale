@@ -147,6 +147,76 @@ make_output_root() {
   echo "${root}"
 }
 
+write_manifest() {
+  local status="$1"
+  local end_utc
+  end_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  MANIFEST_PATH="${manifest_path}" \
+  MANIFEST_STATUS="${status}" \
+  MANIFEST_START_UTC="${run_start_utc}" \
+  MANIFEST_END_UTC="${end_utc}" \
+  MANIFEST_REPO_ROOT="${repo_root}" \
+  MANIFEST_OUTPUT_ROOT="${output_root}" \
+  MANIFEST_IMAGE="${image_path}" \
+  MANIFEST_DEPTH_IMAGE="${depth_image_path}" \
+  MANIFEST_CAM_K="${cam_k_path}" \
+  MANIFEST_SAM2_ENV="${sam2_env}" \
+  MANIFEST_SAM3D_ENV="${sam3d_env}" \
+  MANIFEST_MOGE_ENV="${moge_env}" \
+  MANIFEST_SCALE_ENV="${scale_env}" \
+  MANIFEST_RUN_MOGE="${run_moge}" \
+  MANIFEST_SCALE_ALGO="${scale_algo}" \
+  MANIFEST_SCALE_MODE="${scale_mode}" \
+  MANIFEST_ESTIMATE_SCALE="${estimate_scale}" \
+  MANIFEST_FINE_REGISTRATION="${fine_registration}" \
+  MANIFEST_MESH_DECIMATE="${mesh_decimate}" \
+  MANIFEST_MESH_RATIO="${mesh_decimate_ratio}" \
+  MANIFEST_MESH_TARGET_FACES="${mesh_target_faces}" \
+  MANIFEST_DEPTH_SCALE="${depth_scale}" \
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+def maybe(value: str):
+    return value if value else None
+
+payload = {
+    "status": os.environ["MANIFEST_STATUS"],
+    "start_utc": os.environ["MANIFEST_START_UTC"],
+    "end_utc": os.environ["MANIFEST_END_UTC"],
+    "repo_root": os.environ["MANIFEST_REPO_ROOT"],
+    "output_root": os.environ["MANIFEST_OUTPUT_ROOT"],
+    "inputs": {
+        "image": os.environ["MANIFEST_IMAGE"],
+        "depth_image": maybe(os.environ.get("MANIFEST_DEPTH_IMAGE", "")),
+        "cam_k": maybe(os.environ.get("MANIFEST_CAM_K", "")),
+    },
+    "envs": {
+        "sam2": os.environ["MANIFEST_SAM2_ENV"],
+        "sam3d": os.environ["MANIFEST_SAM3D_ENV"],
+        "moge": os.environ["MANIFEST_MOGE_ENV"],
+        "scale": os.environ["MANIFEST_SCALE_ENV"],
+    },
+    "options": {
+        "run_moge": bool(int(os.environ["MANIFEST_RUN_MOGE"])),
+        "scale_algo": os.environ["MANIFEST_SCALE_ALGO"],
+        "scale_mode": os.environ["MANIFEST_SCALE_MODE"],
+        "estimate_scale": bool(int(os.environ["MANIFEST_ESTIMATE_SCALE"])),
+        "fine_registration": bool(int(os.environ["MANIFEST_FINE_REGISTRATION"])),
+        "mesh_decimate": bool(int(os.environ["MANIFEST_MESH_DECIMATE"])),
+        "mesh_decimate_ratio": float(os.environ["MANIFEST_MESH_RATIO"]),
+        "mesh_target_faces": int(os.environ["MANIFEST_MESH_TARGET_FACES"]),
+        "depth_scale": os.environ["MANIFEST_DEPTH_SCALE"],
+    },
+}
+
+path = Path(os.environ["MANIFEST_PATH"])
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
@@ -274,6 +344,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+pipeline_status="success"
+
 if ! command -v conda >/dev/null 2>&1; then
   echo "conda not found in PATH"
   exit 1
@@ -307,6 +379,21 @@ if [[ -n "${cam_k_path}" && ! -f "${cam_k_path}" ]]; then
   exit 1
 fi
 
+preflight_args=(
+  --image "${image_path}"
+  --sam2-env "${sam2_env}"
+  --sam3d-env "${sam3d_env}"
+  --scale-env "${scale_env}"
+)
+if [[ ${run_moge} -eq 1 ]]; then
+  preflight_args+=(--run-moge --moge-env "${moge_env}")
+fi
+if [[ -n "${depth_image_path}" ]]; then
+  preflight_args+=(--depth-image "${depth_image_path}" --cam-k "${cam_k_path}")
+fi
+
+python3 "${repo_root}/src/preflight_check.py" "${preflight_args[@]}"
+
 image_stem="$(basename "${image_path}")"
 image_stem="${image_stem%.*}"
 output_root="$(make_output_root "${output_base}" "${image_stem}")"
@@ -315,9 +402,14 @@ sam3d_out_dir="${output_root}/sam3d"
 moge_out_dir="${output_root}/moge_scale"
 real_out_dir="${output_root}/real_scale"
 scale_out_dir="${output_root}/sam3d_scale"
+manifest_path="${output_root}/run_manifest.json"
+run_start_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+pipeline_status="failed"
 
 mkdir -p "${output_root}"
 echo "Output root: ${output_root}"
+write_manifest "running"
+trap 'write_manifest "${pipeline_status}"' EXIT
 # 원본 이미지는 결과 루트에 복사(재현성/추적 목적)
 cp -n "${image_path}" "${output_root}/" 2>/dev/null || true
 if [[ -n "${depth_image_path}" ]]; then
@@ -454,11 +546,6 @@ for mask_path in "${masks[@]}"; do
 
   if [[ -n "${target_npz}" ]]; then
     sam3d_pose_ply="${sam3d_out_dir}/${mask_stem}_pose.ply"
-
-    if ! conda run -n "${scale_env}" python -c "import trimesh" >/dev/null 2>&1; then
-      echo "Installing trimesh into ${scale_env} for mesh scaling outputs..."
-      conda run -n "${scale_env}" python -m pip install trimesh
-    fi
 
     scale_flags=()
     if [[ ${estimate_scale} -eq 1 ]]; then

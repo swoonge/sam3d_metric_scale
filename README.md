@@ -27,6 +27,7 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 
 ## 출력 구조
 - 기본 루트: `outputs/<image_stem>[_###]/`
+  - `run_manifest.json`: 실행 입력/옵션/env/상태 기록
   - `sam2_masks/`: SAM2 마스크
   - `moge_scale/`: MoGe 스케일 결과(JSON/NPZ/PLY)
   - `sam3d/`: SAM3D 결과(Ply)
@@ -43,6 +44,9 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
   - `sam2/`, `sam-3d-objects/`, `MoGe/`를 이 레포 루트에 두는 구성을 권장합니다.
   - 다른 위치라면 `SAM2_ROOT`, `SAM3D_ROOT`, `MOGE_ROOT`로 지정하세요.
 - SAM3D 사용은 HF 승인 필요.
+- 파이프라인 실행 전 `src/preflight_check.py`를 통해 의존성/입력 파일을 검사합니다.
+  - 기본 검사 모듈: `sam2`, `sam3d_objects`, `trimesh`, `plyfile` (+ `--run-moge` 시 `moge`)
+  - 실행 중 자동 `pip install`은 하지 않습니다. 누락 모듈은 사전 설치가 필요합니다.
 
 ## 설치 (권장 구성)
 
