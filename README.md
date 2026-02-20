@@ -5,18 +5,23 @@ RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 �
 ## GitHub 레포 디스크립션
 - Description: Single-image SAM2 → MoGe2 → SAM3D pipeline for metric scale research and visualization.
 - Topics: `sam2`, `sam3d`, `moge2`, `metric-depth`, `3d`, `point-cloud`, `gradio`, `sim2real`
-- 별도 파일: `REPO_DESCRIPTION.md`
+- 별도 파일: `REPO_DESCRIPTION.md` (선택, GitHub Description/Topics 관리용)
 
 ## 구성
 - `src/`
   - `image_point.py`: SAM2 포인트 기반 마스크 UI
   - `moge_scale.py`: 마스크 영역 MoGe depth + 스케일 추정
+  - `real_depth_scale.py`: 실측 depth 기반 포인트/스케일 통계 생성
   - `sam3d_export.py`: 이미지+마스크 → SAM3D 결과(.ply)
   - `sam3d_scale.py`: 스케일 알고리즘 테스트 러너(ICP/TEASER++)
   - `sam3d_scale_teaserpp.py`: TEASER++ 기반 스케일 추정
-  - `sam3d_scale_utils.py`: 공통 유틸 + 매칭 시각화
+  - `sam3d_scale_utils.py`: 스케일 추정 공통 유틸
+  - `geometry_depth_utils.py`: depth/geometry 공통 유틸(MAD/backproject/PLY 저장)
+  - `camera_intrinsics.py`: 카메라 내참수 파서(3x3, `fx fy cx cy`)
+  - `preflight_check.py`: 파이프라인 실행 전 의존성/입력 체크
 - `datas/`: 샘플 이미지
 - `outputs/`: 결과 저장(자동 생성, gitignored)
+- `tests/`: 핵심 회귀 테스트(pytest)
 - 외부 레포(로컬 의존, gitignored): `sam2/`, `sam-3d-objects/`, `MoGe/`, (옵션) `TEASER-plusplus/`
 
 ## 외부 레포 링크
@@ -173,6 +178,15 @@ MoGe(옵션) 활성화:
 - `--mesh-target-faces`: 목표 face 수 (비율 대신 사용, 기본: 20000)
 - `--no-mesh-decimate`: 메시 밀도 조정 비활성화
 
+실행 전 preflight만 단독 확인:
+```bash
+python src/preflight_check.py \
+  --image /path/to/rgb.png \
+  --sam2-env sam2 \
+  --sam3d-env sam3d-objects \
+  --scale-env sam3d-objects
+```
+
 ### 2) 스케일 알고리즘 단독 실행
 ```bash
 conda run -n sam3d-objects python src/sam3d_scale.py \
@@ -229,6 +243,15 @@ conda run -n sam3d-objects python src/mesh_decimate.py \
   - `teaserpp` 환경에서 `pip install -v ./TEASER-plusplus`가 정상 완료되었는지 확인하세요.
 - SAM3D 메모리 이슈  
   - VRAM 32GB 권장. 24GB에서는 추론 실패 가능.
+
+## 개발자 가이드
+- 테스트 실행:
+```bash
+python -m pytest -q tests
+```
+- 문서 파일 역할:
+  - `README.md`: 사용자/개발자 공용 상세 가이드(실행, 설치, 출력, 트러블슈팅)
+  - `REPO_DESCRIPTION.md`: GitHub 레포 Description/Topics 관리용 짧은 메모(선택)
 
 ## .gitignore 안내
 - `outputs/`, `hugging_face_token.txt`, `sam2/`, `sam-3d-objects/`, `MoGe/`는 기본적으로 gitignored입니다.
