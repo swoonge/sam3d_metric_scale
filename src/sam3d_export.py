@@ -20,8 +20,8 @@ import sam3d_scale_utils as scale_utils
 CAMERA_Y_UP_TO_WORLD_Z_UP = np.array(
     [
         [1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, -1.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0],
     ],
     dtype=np.float32,
 )
