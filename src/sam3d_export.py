@@ -17,6 +17,16 @@ from camera_intrinsics import load_intrinsics_matrix
 import sam3d_scale_utils as scale_utils
 
 
+CAMERA_Y_UP_TO_WORLD_Z_UP = np.array(
+    [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, -1.0, 0.0],
+    ],
+    dtype=np.float32,
+)
+
+
 def resolve_sam3d_root(repo_root: Path) -> Path:
     """SAM3D Objects 레포 경로를 환경변수/기본 후보에서 탐색."""
     env_root = os.environ.get("SAM3D_ROOT")
@@ -397,6 +407,27 @@ def save_pose_transformed_gaussian(
     scale_utils.write_scaled_ply(ply, points_t, output_ply, scale=float(np.mean(scale)))
 
 
+def export_mesh_world_z_up(mesh, output_path: Path) -> None:
+    """Mesh를 world(z-up) 축으로 맞춰 저장."""
+    try:
+        import trimesh
+    except ImportError:
+        if hasattr(mesh, "export"):
+            mesh.export(output_path)
+        return
+
+    if isinstance(mesh, trimesh.Trimesh):
+        mesh_t = mesh.copy()
+        axis_transform = np.eye(4, dtype=np.float32)
+        axis_transform[:3, :3] = CAMERA_Y_UP_TO_WORLD_Z_UP
+        mesh_t.apply_transform(axis_transform)
+        mesh_t.export(output_path)
+        return
+
+    if hasattr(mesh, "export"):
+        mesh.export(output_path)
+
+
 def save_pose_transformed_mesh(
     mesh,
     output_path: Path,
@@ -409,25 +440,13 @@ def save_pose_transformed_mesh(
         import trimesh
     except ImportError:
         return
-    ply_axis_fix = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [0.0, -1.0, 0.0],
-        ],
-        dtype=np.float32,
-    )
     if isinstance(mesh, trimesh.Trimesh):
         mesh_t = mesh.copy()
         transform = np.eye(4, dtype=np.float32)
         transform[:3, :3] = rotation @ np.diag(scale.astype(np.float32))
         transform[:3, 3] = translation.astype(np.float32)
         mesh_t.apply_transform(transform)
-        if output_path.suffix.lower() == ".ply":
-            ply_transform = np.eye(4, dtype=np.float32)
-            ply_transform[:3, :3] = ply_axis_fix
-            mesh_t.apply_transform(ply_transform)
-        mesh_t.export(output_path)
+        export_mesh_world_z_up(mesh_t, output_path)
 
 
 def visualize_with_open3d(points: np.ndarray, colors: np.ndarray | None) -> bool:
@@ -782,26 +801,15 @@ def main() -> int:
             try:
                 if args.mesh_format in ("glb", "both", "all") and mesh_glb is not None:
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.glb")
-                    mesh_glb.export(mesh_path)
+                    export_mesh_world_z_up(mesh_glb, mesh_path)
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if args.mesh_format in ("ply", "both", "all"):
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.ply")
-                    mesh_to_export = mesh.copy()
-                    ply_transform = np.eye(4, dtype=np.float32)
-                    ply_transform[:3, :3] = np.array(
-                        [
-                            [1.0, 0.0, 0.0],
-                            [0.0, 0.0, 1.0],
-                            [0.0, -1.0, 0.0],
-                        ],
-                        dtype=np.float32,
-                    )
-                    mesh_to_export.apply_transform(ply_transform)
-                    mesh_to_export.export(mesh_path)
+                    export_mesh_world_z_up(mesh, mesh_path)
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if args.mesh_format in ("obj", "all"):
                     mesh_path = output_path.with_name(f"{output_path.stem}_mesh.obj")
-                    mesh.export(mesh_path)
+                    export_mesh_world_z_up(mesh, mesh_path)
                     print(f"SAM3D mesh saved: {mesh_path}")
                 if pose_rot_mat is not None and pose_scale_vec is not None and pose_trans_vec is not None:
                     pose_mesh_source = mesh_raw if mesh_raw is not None else mesh
