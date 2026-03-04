@@ -235,8 +235,23 @@ def depth_to_pointmap(depth: np.ndarray, cam_k: np.ndarray) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
-def apply_pointmap_mask(pointmap: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Apply foreground mask on pointmap by zeroing background points."""
+def sanitize_depth_for_pointmap(depth: np.ndarray) -> np.ndarray:
+    """Mark invalid depth (NaN/Inf/non-positive) as NaN for stable intrinsics fitting."""
+    depth = np.asarray(depth, dtype=np.float32)
+    invalid = (~np.isfinite(depth)) | (depth <= 0.0)
+    if not np.any(invalid):
+        return depth
+    cleaned = depth.copy()
+    cleaned[invalid] = np.nan
+    return cleaned
+
+
+def apply_pointmap_mask(
+    pointmap: np.ndarray,
+    mask: np.ndarray,
+    fill_value: float = 0.0,
+) -> np.ndarray:
+    """Apply foreground mask on pointmap by replacing background points."""
     mask_bool = np.asarray(mask).astype(bool)
     if mask_bool.shape != pointmap.shape[:2]:
         import cv2
@@ -247,7 +262,7 @@ def apply_pointmap_mask(pointmap: np.ndarray, mask: np.ndarray) -> np.ndarray:
             interpolation=cv2.INTER_NEAREST,
         ).astype(bool)
     masked = pointmap.copy()
-    masked[~mask_bool] = 0.0
+    masked[~mask_bool] = fill_value
     return masked
 
 
@@ -655,9 +670,11 @@ def main() -> int:
                 (image.shape[1], image.shape[0]),
                 interpolation=cv2.INTER_NEAREST,
             )
+        depth = sanitize_depth_for_pointmap(depth)
         pointmap = depth_to_pointmap(depth, cam_k)
         if args.pointmap_mask:
-            pointmap = apply_pointmap_mask(pointmap, mask)
+            # Keep background as NaN so intrinsics inference ignores it.
+            pointmap = apply_pointmap_mask(pointmap, mask, fill_value=np.nan)
 
         try:
             from sam3d_objects.pipeline.inference_pipeline_pointmap import (
