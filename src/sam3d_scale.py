@@ -143,8 +143,8 @@ def save_transformed_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray,
         ply_transform[:3, :3] = np.array(
             [
                 [1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0],
-                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+                [0.0, 1.0, 0.0],
             ],
             dtype=np.float32,
         )
@@ -166,8 +166,8 @@ def save_scaled_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray) -> N
         ply_transform[:3, :3] = np.array(
             [
                 [1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0],
-                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+                [0.0, 1.0, 0.0],
             ],
             dtype=np.float32,
         )
