@@ -16,6 +16,18 @@ import torch
 from camera_intrinsics import load_intrinsics_matrix
 import sam3d_scale_utils as scale_utils
 
+
+# Align OBJ/PLY orientation to match GLB in downstream viewers.
+OBJ_PLY_TO_GLB_ROT_X_POS90 = np.array(
+    [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0],
+    ],
+    dtype=np.float32,
+)
+
+
 def resolve_sam3d_root(repo_root: Path) -> Path:
     """SAM3D Objects 레포 경로를 환경변수/기본 후보에서 탐색."""
     env_root = os.environ.get("SAM3D_ROOT")
@@ -420,8 +432,19 @@ def export_mesh_world_z_up(mesh, output_path: Path) -> None:
             mesh.export(output_path)
         return
 
-    if isinstance(mesh, trimesh.Trimesh):
-        mesh.copy().export(output_path)
+    mesh_to_export = mesh
+    if isinstance(mesh, trimesh.Scene):
+        if not mesh.geometry:
+            return
+        mesh_to_export = trimesh.util.concatenate(tuple(mesh.dump()))
+
+    if isinstance(mesh_to_export, trimesh.Trimesh):
+        mesh_to_export = mesh_to_export.copy()
+        if output_path.suffix.lower() in (".obj", ".ply"):
+            transform = np.eye(4, dtype=np.float32)
+            transform[:3, :3] = OBJ_PLY_TO_GLB_ROT_X_POS90
+            mesh_to_export.apply_transform(transform)
+        mesh_to_export.export(output_path)
         return
 
     if hasattr(mesh, "export"):

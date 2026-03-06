@@ -24,6 +24,14 @@ from sam3d_scale_utils import (
 
 MIN_EXTRA_SCALE = 1e-6
 MAX_EXTRA_SCALE = 1e3
+OBJ_PLY_TO_GLB_ROT_X_POS90 = np.array(
+    [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0],
+    ],
+    dtype=np.float32,
+)
 
 
 def strip_pose_suffix(stem: str) -> str:
@@ -138,6 +146,10 @@ def save_transformed_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray,
     transform[:3, 3] = trans.astype(np.float32)
     mesh_t = mesh.copy()
     mesh_t.apply_transform(transform)
+    if out_path.suffix.lower() in (".obj", ".ply"):
+        out_align = np.eye(4, dtype=np.float32)
+        out_align[:3, :3] = OBJ_PLY_TO_GLB_ROT_X_POS90
+        mesh_t.apply_transform(out_align)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mesh_t.export(out_path)
 
@@ -150,6 +162,10 @@ def save_scaled_mesh(src_path: Path, out_path: Path, scale_vec: np.ndarray) -> N
     transform[:3, :3] = np.diag(scale_vec.astype(np.float32))
     mesh_t = mesh.copy()
     mesh_t.apply_transform(transform)
+    if out_path.suffix.lower() in (".obj", ".ply"):
+        out_align = np.eye(4, dtype=np.float32)
+        out_align[:3, :3] = OBJ_PLY_TO_GLB_ROT_X_POS90
+        mesh_t.apply_transform(out_align)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mesh_t.export(out_path)
 
