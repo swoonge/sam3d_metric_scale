@@ -50,3 +50,24 @@ def test_export_mesh_world_z_up_keeps_glb_as_is(tmp_path):
     extents = loaded.bounding_box.extents
 
     assert np.allclose(extents, np.array([1.0, 2.0, 3.0]), atol=1e-5)
+
+
+def test_obj_axis_fix_is_negative_90deg_about_x(tmp_path):
+    # +Y marker should map to -Z after x-axis -90deg rotation.
+    verts = np.array(
+        [
+            [0.0, 1.0, 0.0],  # +Y marker
+            [0.0, 0.0, 2.0],  # +Z marker
+            [1.0, 0.0, 0.0],  # +X marker
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2]], dtype=np.int64)
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+    out_path = tmp_path / "neg90_check.obj"
+    export_mesh_world_z_up(mesh, out_path)
+
+    loaded = trimesh.load(out_path, force="mesh")
+    loaded_verts = loaded.vertices
+    target = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+    assert np.min(np.linalg.norm(loaded_verts - target, axis=1)) < 1e-5
