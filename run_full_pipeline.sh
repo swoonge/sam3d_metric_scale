@@ -532,7 +532,6 @@ for mask_path in "${masks[@]}"; do
     --sam3d-config "${sam3d_config}" \
     --output "${output_path}" \
     --seed "${sam3d_seed}" \
-    --pose-rot-transpose \
     "${sam3d_pointmap_flags[@]}" \
     ${compile_flag}
 

@@ -16,17 +16,6 @@ import torch
 from camera_intrinsics import load_intrinsics_matrix
 import sam3d_scale_utils as scale_utils
 
-
-CAMERA_Y_UP_TO_WORLD_Z_UP = np.array(
-    [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ],
-    dtype=np.float32,
-)
-
-
 def resolve_sam3d_root(repo_root: Path) -> Path:
     """SAM3D Objects 레포 경로를 환경변수/기본 후보에서 탐색."""
     env_root = os.environ.get("SAM3D_ROOT")
@@ -423,7 +412,7 @@ def save_pose_transformed_gaussian(
 
 
 def export_mesh_world_z_up(mesh, output_path: Path) -> None:
-    """Mesh를 world(z-up) 축으로 맞춰 저장."""
+    """Mesh를 좌표 변환 없이 그대로 저장."""
     try:
         import trimesh
     except ImportError:
@@ -432,11 +421,7 @@ def export_mesh_world_z_up(mesh, output_path: Path) -> None:
         return
 
     if isinstance(mesh, trimesh.Trimesh):
-        mesh_t = mesh.copy()
-        axis_transform = np.eye(4, dtype=np.float32)
-        axis_transform[:3, :3] = CAMERA_Y_UP_TO_WORLD_Z_UP
-        mesh_t.apply_transform(axis_transform)
-        mesh_t.export(output_path)
+        mesh.copy().export(output_path)
         return
 
     if hasattr(mesh, "export"):
@@ -718,9 +703,7 @@ def main() -> int:
         return 1
 
     # NOTE: pointmap은 SAM3D 내부에서 Pytorch3D camera frame으로 변환되어 사용된다.
-    #       비교 기준이 되는 real/moge pointcloud는 일반적인 camera frame(R3)로 생성되므로,
-    #       여기서는 pointmap을 P3D -> camera frame으로 역변환하여 저장한다.
-    cam_from_p3d_rot = None
+    #       여기서는 pointmap 시각화/분석을 위해 P3D -> camera frame으로 역변환해 저장한다.
     if args.save_pointmap:
         try:
             rgba = inference.merge_mask_to_rgba(image, mask)
@@ -747,7 +730,6 @@ def main() -> int:
                 # P3D -> camera 변환
                 points_cam = cam_to_p3d.inverse().transform_points(points_flat)
                 pointmap = points_cam.reshape(h, w, 3).cpu().numpy()
-                cam_from_p3d_rot = cam_to_p3d.inverse().get_matrix()[0, :3, :3].cpu().numpy()
             except Exception:
                 pointmap = pointmap_p3d.cpu().permute(1, 2, 0).numpy()
 
@@ -782,11 +764,6 @@ def main() -> int:
     pose_output_dir.mkdir(parents=True, exist_ok=True)
 
     if pose_rot_mat is not None and pose_scale_vec is not None and pose_trans_vec is not None:
-        # pose가 P3D frame 기준으로 예측되었다면 camera frame으로 역변환한다.
-        # (pointmap 저장 시 적용한 P3D->camera 변환과 동일한 회전)
-        if cam_from_p3d_rot is not None:
-            pose_rot_mat = cam_from_p3d_rot @ pose_rot_mat
-            pose_trans_vec = (cam_from_p3d_rot @ pose_trans_vec.reshape(3, 1)).reshape(3)
         pose_json = pose_output_dir / f"{output_path.stem}_pose.json"
         pose_payload = {
             "rotation": pose_rot_meta,
