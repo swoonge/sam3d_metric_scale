@@ -16,13 +16,12 @@ import torch
 from camera_intrinsics import load_intrinsics_matrix
 import sam3d_scale_utils as scale_utils
 
-
-# Align OBJ/PLY orientation to match GLB in downstream viewers.
-OBJ_PLY_TO_GLB_ROT_X_NEG90 = np.array(
+# Counterclockwise +90deg rotation around +X (right-hand rule).
+OUTPUT_ROT_X_CCW_90 = np.array(
     [
         [1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, -1.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0],
     ],
     dtype=np.float32,
 )
@@ -424,7 +423,7 @@ def save_pose_transformed_gaussian(
 
 
 def export_mesh_world_z_up(mesh, output_path: Path) -> None:
-    """Mesh를 좌표 변환 없이 그대로 저장."""
+    """Mesh를 x축 기준 반시계 +90도 회전 후 저장."""
     try:
         import trimesh
     except ImportError:
@@ -440,10 +439,9 @@ def export_mesh_world_z_up(mesh, output_path: Path) -> None:
 
     if isinstance(mesh_to_export, trimesh.Trimesh):
         mesh_to_export = mesh_to_export.copy()
-        if output_path.suffix.lower() in (".obj", ".ply"):
-            transform = np.eye(4, dtype=np.float32)
-            transform[:3, :3] = OBJ_PLY_TO_GLB_ROT_X_NEG90
-            mesh_to_export.apply_transform(transform)
+        transform = np.eye(4, dtype=np.float32)
+        transform[:3, :3] = OUTPUT_ROT_X_CCW_90
+        mesh_to_export.apply_transform(transform)
         mesh_to_export.export(output_path)
         return
 
