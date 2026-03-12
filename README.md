@@ -2,6 +2,19 @@
 
 RGB-D 입력을 활용해 SAM3D를 안정적으로 구동하고, 실측(또는 추정) 깊이 기반으로 스케일이 보정된 3D 결과를 얻기 위한 로컬 파이프라인입니다.
 
+## Quick Start (Simple)
+아래 커맨드가 현재 기본 실행 예시입니다 (`sam2d_auto` + real depth + cam intrinsics):
+
+```bash
+./run_full_pipeline.sh \
+  --sam2d-method sam2d_auto \
+  --image /home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_fruits_into_bowl/rgb/000000.png \
+  --depth-image /home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_fruits_into_bowl/depth/000000.png \
+  --cam-k /home/vision/Sim2Real_Data_Augmentation_for_VLA/data/user_data_260123/user_data/move_fruits_into_bowl/cam_K.txt \
+  --mesh-target-faces 20000 \
+  --output-base outputs/demo/move_fruits_into_bowl
+```
+
 ## GitHub 레포 디스크립션
 - Description: Single-image SAM2 → MoGe2 → SAM3D pipeline for metric scale research and visualization.
 - Topics: `sam2`, `sam3d`, `moge2`, `metric-depth`, `3d`, `point-cloud`, `gradio`, `sim2real`
