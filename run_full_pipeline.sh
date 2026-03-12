@@ -15,6 +15,7 @@ repo_root="${script_dir}"
 
 # 기본 conda env 이름
 sam2_env="sam2"
+sam2d_method="sam2d_point"
 sam3d_env="sam3d-objects"
 moge_env="moge"
 scale_env=""
@@ -98,6 +99,7 @@ Options:
   --output-base PATH        Base output directory (default: outputs)
   --latest                  Process latest mask only (default: all)
   --sam2-env NAME           Conda env for SAM2 (default: sam2)
+  --sam2d-method NAME       sam2d_point | sam2d_auto (default: sam2d_point)
   --sam3d-env NAME          Conda env for SAM3D (default: sam3d-objects)
   --scale-env NAME          Conda env for scale estimation (default: sam3d-objects for icp, teaserpp for teaserpp)
   --sam3d-config PATH       SAM3D pipeline.yaml path
@@ -161,6 +163,7 @@ write_manifest() {
   MANIFEST_DEPTH_IMAGE="${depth_image_path}" \
   MANIFEST_CAM_K="${cam_k_path}" \
   MANIFEST_SAM2_ENV="${sam2_env}" \
+  MANIFEST_SAM2D_METHOD="${sam2d_method}" \
   MANIFEST_SAM3D_ENV="${sam3d_env}" \
   MANIFEST_MOGE_ENV="${moge_env}" \
   MANIFEST_SCALE_ENV="${scale_env}" \
@@ -194,6 +197,7 @@ payload = {
     },
     "envs": {
         "sam2": os.environ["MANIFEST_SAM2_ENV"],
+        "sam2d_method": os.environ["MANIFEST_SAM2D_METHOD"],
         "sam3d": os.environ["MANIFEST_SAM3D_ENV"],
         "moge": os.environ["MANIFEST_MOGE_ENV"],
         "scale": os.environ["MANIFEST_SCALE_ENV"],
@@ -241,6 +245,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --sam2-env)
       sam2_env="$2"
+      shift 2
+      ;;
+    --sam2d-method)
+      sam2d_method="$2"
       shift 2
       ;;
     --sam3d-env)
@@ -351,6 +359,11 @@ if ! command -v conda >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ "${sam2d_method}" != "sam2d_point" && "${sam2d_method}" != "sam2d_auto" ]]; then
+  echo "Invalid --sam2d-method: ${sam2d_method} (expected: sam2d_point | sam2d_auto)"
+  exit 1
+fi
+
 # scale env 기본값 결정(알고리즘별)
 if [[ ${scale_env_set} -eq 0 ]]; then
   if [[ "${scale_algo}" == "teaserpp" ]]; then
@@ -417,9 +430,19 @@ if [[ -n "${depth_image_path}" ]]; then
 fi
 
 # 1) SAM2 UI 실행(마스크 생성)
-conda run -n "${sam2_env}" python "${repo_root}/src/image_point.py" \
-  --image "${image_path}" \
+sam2_script="${repo_root}/src/image_point.py"
+if [[ "${sam2d_method}" == "sam2d_auto" ]]; then
+  sam2_script="${repo_root}/src/image_auto.py"
+fi
+echo "SAM2 mask method: ${sam2d_method}"
+sam2_args=(
+  --image "${image_path}"
   --output-dir "${mask_dir}"
+)
+if [[ "${sam2d_method}" == "sam2d_auto" && -n "${depth_image_path}" ]]; then
+  sam2_args+=(--depth-image "${depth_image_path}")
+fi
+conda run -n "${sam2_env}" python "${sam2_script}" "${sam2_args[@]}"
 
 mkdir -p "${sam3d_out_dir}" "${scale_out_dir}"
 if [[ ${run_moge} -eq 1 ]]; then
